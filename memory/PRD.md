@@ -81,3 +81,26 @@ Build a shoplifting detection system for liquor stores, convenience stores and g
 3. Add user authentication
 4. Video playback with incident timestamp markers
 5. Export functionality for compliance reporting
+
+## Updates - January 2025
+
+### Watchlist Feature Added
+- Upload photos of known shoplifters with name, alias, threat level
+- View and delete watchlist entries  
+- Dashboard shows watchlist count
+- Threat levels: High, Medium, Low
+
+### Live Camera Feed (Placeholder)
+- UI section prepared for RTSP camera integration
+- Backend comments with implementation guide:
+  ```
+  // To add RTSP camera support:
+  // 1. Create CameraFeed model: id, name, rtsp_url, location, is_active
+  // 2. Add endpoints: POST/GET/DELETE /api/cameras
+  // 3. Background task: connect RTSP, extract frames, analyze with GPT
+  // 4. WebSocket endpoint for real-time streaming
+  ```
+
+### WhatsApp Integration (Deferred)
+- User will add later
+- Recommended: Twilio WhatsApp API
