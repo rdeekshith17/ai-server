@@ -87,6 +87,40 @@ class AnalyticsData(BaseModel):
     incidents_by_hour: dict = {}
     incidents_by_type: dict = {}
 
+class WatchlistPerson(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    alias: Optional[str] = None
+    description: Optional[str] = None
+    photo_base64: str
+    threat_level: str = "high"  # high, medium, low
+    added_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_seen: Optional[datetime] = None
+    notes: Optional[str] = None
+    is_active: bool = True
+
+# ============================================
+# LIVE CAMERA FEED SECTION - TO BE IMPLEMENTED
+# ============================================
+# TODO: Add live camera feed integration
+# 
+# To add RTSP camera support:
+# 1. Create a CameraFeed model with fields: id, name, rtsp_url, location, is_active
+# 2. Add endpoints: POST /api/cameras (add camera), GET /api/cameras (list), DELETE /api/cameras/{id}
+# 3. Create a background task that:
+#    - Connects to RTSP stream using cv2.VideoCapture(rtsp_url)
+#    - Extracts frames at intervals (e.g., every 2-5 seconds)
+#    - Runs analyze_frame_with_gpt() on each frame
+#    - Checks against watchlist
+#    - Creates incidents if suspicious activity detected
+# 4. Add WebSocket endpoint for real-time frame streaming to frontend
+#
+# Example RTSP URL formats:
+# - rtsp://username:password@ip_address:554/stream1
+# - rtsp://ip_address:554/live/ch00_0
+# ============================================
+
 # Helper functions
 def extract_frames_from_video(video_path: str, max_frames: int = 10) -> List[tuple]:
     """Extract frames from video at regular intervals"""
