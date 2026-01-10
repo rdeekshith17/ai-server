@@ -5,6 +5,7 @@ import Dashboard from "./pages/Dashboard";
 import VideoUpload from "./pages/VideoUpload";
 import Incidents from "./pages/Incidents";
 import Analytics from "./pages/Analytics";
+import Watchlist from "./pages/Watchlist";
 import { Toaster } from "./components/ui/sonner";
 
 function App() {
@@ -15,6 +16,7 @@ function App() {
           <Route path="/" element={<Layout />}>
             <Route index element={<Dashboard />} />
             <Route path="upload" element={<VideoUpload />} />
+            <Route path="watchlist" element={<Watchlist />} />
             <Route path="incidents" element={<Incidents />} />
             <Route path="analytics" element={<Analytics />} />
           </Route>
