@@ -159,7 +159,7 @@ Respond in this exact JSON format:
         
         user_message = UserMessage(
             text=f"Analyze this security camera frame from {video_name} for potential shoplifting or suspicious activity.",
-            image_contents=[image_content]
+            file_contents=[image_content]
         )
         
         response = await chat.send_message(user_message)
