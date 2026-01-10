@@ -1,34 +1,254 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
-}
-
-.App-header {
-    background-color: #0f0f10;
+/* Main App Styles */
+.App {
     min-height: 100vh;
+    background-color: hsl(240 10% 4%);
+}
+
+/* Video feed container */
+.video-feed {
+    position: relative;
+    border-radius: 0.5rem;
+    overflow: hidden;
+    background: #000;
+}
+
+.video-feed video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+/* REC indicator */
+.rec-indicator {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    background: rgba(0, 0, 0, 0.7);
+    border-radius: 0.25rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: #ef4444;
+}
+
+.rec-dot {
+    width: 8px;
+    height: 8px;
+    background: #ef4444;
+    border-radius: 50%;
+    animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+/* Timestamp overlay */
+.timestamp-overlay {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.8);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+/* Stats card */
+.stat-card {
+    position: relative;
+    padding: 1.5rem;
+    background: hsl(240 6% 10% / 0.8);
+    border: 1px solid hsl(240 4% 16%);
+    border-radius: 0.5rem;
+    overflow: hidden;
+    transition: all 0.2s ease;
+}
+
+.stat-card:hover {
+    border-color: hsl(217 91% 60% / 0.3);
+}
+
+.stat-card .stat-value {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 2.5rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.stat-card .stat-label {
+    font-size: 0.875rem;
+    color: hsl(240 5% 65%);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0.5rem;
+}
+
+/* Sidebar navigation */
+.sidebar {
+    background: hsl(240 6% 10% / 0.95);
+    backdrop-filter: blur(12px);
+    border-right: 1px solid hsl(240 4% 16%);
+}
+
+.sidebar-link {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    color: hsl(240 5% 65%);
+    text-decoration: none;
+    border-radius: 0.375rem;
+    transition: all 0.15s ease;
+}
+
+.sidebar-link:hover {
+    background: hsl(240 4% 16%);
+    color: hsl(0 0% 98%);
+}
+
+.sidebar-link.active {
+    background: hsl(217 91% 60% / 0.1);
+    color: hsl(217 91% 60%);
+    border: 1px solid hsl(217 91% 60% / 0.3);
+}
+
+/* Incident severity badges */
+.badge-critical {
+    background: hsl(0 84% 60% / 0.15);
+    color: hsl(0 84% 60%);
+    border: 1px solid hsl(0 84% 60% / 0.3);
+}
+
+.badge-warning {
+    background: hsl(38 92% 50% / 0.15);
+    color: hsl(38 92% 50%);
+    border: 1px solid hsl(38 92% 50% / 0.3);
+}
+
+.badge-safe {
+    background: hsl(160 84% 39% / 0.15);
+    color: hsl(160 84% 39%);
+    border: 1px solid hsl(160 84% 39% / 0.3);
+}
+
+/* Upload dropzone */
+.dropzone {
+    border: 2px dashed hsl(240 4% 25%);
+    border-radius: 0.5rem;
+    padding: 3rem;
+    text-align: center;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.dropzone:hover,
+.dropzone.active {
+    border-color: hsl(217 91% 60%);
+    background: hsl(217 91% 60% / 0.05);
+}
+
+/* Progress bar */
+.progress-bar {
+    height: 4px;
+    background: hsl(240 4% 16%);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, hsl(217 91% 60%), hsl(187 92% 47%));
+    transition: width 0.3s ease;
+}
+
+/* Table styles */
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.data-table th {
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    color: hsl(240 5% 65%);
+    padding: 0.75rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid hsl(240 4% 16%);
+}
+
+.data-table td {
+    padding: 1rem;
+    border-bottom: 1px solid hsl(240 4% 16% / 0.5);
+    font-size: 0.875rem;
+}
+
+.data-table tr:hover td {
+    background: hsl(240 4% 16% / 0.3);
+}
+
+/* Chart container */
+.chart-container {
+    background: hsl(240 6% 10% / 0.5);
+    border: 1px solid hsl(240 4% 16%);
+    border-radius: 0.5rem;
+    padding: 1.5rem;
+}
+
+/* Loading skeleton */
+.skeleton {
+    background: linear-gradient(
+        90deg,
+        hsl(240 4% 16%) 25%,
+        hsl(240 4% 20%) 50%,
+        hsl(240 4% 16%) 75%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-loading 1.5s infinite;
+    border-radius: 0.25rem;
+}
+
+@keyframes skeleton-loading {
+    0% {
+        background-position: 200% 0;
+    }
+    100% {
+        background-position: -200% 0;
+    }
+}
+
+/* Button styles */
+.btn-primary {
+    background: hsl(217 91% 60%);
     color: white;
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.625rem 1.5rem;
+    border-radius: 0.25rem;
+    border: none;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    box-shadow: 0 0 15px hsl(217 91% 60% / 0.3);
 }
 
-.App-link {
-    color: #61dafb;
+.btn-primary:hover {
+    background: hsl(217 91% 55%);
+    box-shadow: 0 0 25px hsl(217 91% 60% / 0.5);
 }
 
-@keyframes App-logo-spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
+.btn-destructive {
+    background: hsl(0 84% 60% / 0.1);
+    color: hsl(0 84% 60%);
+    border: 1px solid hsl(0 84% 60% / 0.3);
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.625rem 1.5rem;
+    border-radius: 0.25rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.btn-destructive:hover {
+    background: hsl(0 84% 60%);
+    color: white;
 }
