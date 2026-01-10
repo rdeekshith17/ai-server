@@ -112,9 +112,8 @@ export default function Watchlist() {
       data.append("threat_level", formData.threat_level);
       if (formData.notes) data.append("notes", formData.notes);
 
-      await axios.post(`${API}/watchlist`, data, {
-        headers: { "Content-Type": "multipart/form-data" }
-      });
+      const response = await axios.post(`${API}/watchlist`, data);
+      console.log("Watchlist response:", response.data);
 
       toast.success("Person added to watchlist");
       setShowAddDialog(false);
@@ -122,6 +121,7 @@ export default function Watchlist() {
       fetchWatchlist();
       fetchStats();
     } catch (err) {
+      console.error("Watchlist error:", err);
       toast.error(err.response?.data?.detail || "Failed to add person");
     } finally {
       setUploading(false);
