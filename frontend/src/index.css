@@ -172,3 +172,8 @@ code, .mono {
         display: contents !important;
     }
 }
+
+/* Ensure dropdown menus appear above other elements */
+[data-radix-popper-content-wrapper] {
+    z-index: 9999 !important;
+}
