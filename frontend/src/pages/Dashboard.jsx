@@ -118,11 +118,13 @@ const VideoRow = ({ video }) => {
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
+  const [watchlistStats, setWatchlistStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     fetchDashboardStats();
+    fetchWatchlistStats();
     const interval = setInterval(fetchDashboardStats, 30000); // Refresh every 30s
     return () => clearInterval(interval);
   }, []);
@@ -137,6 +139,15 @@ export default function Dashboard() {
       setError("Failed to load dashboard data");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchWatchlistStats = async () => {
+    try {
+      const response = await axios.get(`${API}/watchlist/stats/summary`);
+      setWatchlistStats(response.data);
+    } catch (err) {
+      console.error("Failed to fetch watchlist stats:", err);
     }
   };
 
