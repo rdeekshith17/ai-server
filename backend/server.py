@@ -600,6 +600,263 @@ async def get_dashboard_stats():
             "ai_status": "offline"
         }
 
+# ============================================
+# WATCHLIST ENDPOINTS
+# ============================================
+
+@api_router.post("/watchlist")
+async def add_to_watchlist(
+    name: str = Form(...),
+    photo: UploadFile = File(...),
+    alias: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    threat_level: str = Form("high"),
+    notes: Optional[str] = Form(None)
+):
+    """Add a person to the watchlist"""
+    try:
+        # Validate image type
+        if not photo.content_type or not photo.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="File must be an image")
+        
+        # Read and encode image
+        content = await photo.read()
+        photo_base64 = base64.b64encode(content).decode('utf-8')
+        
+        person_id = str(uuid.uuid4())
+        person_doc = {
+            "id": person_id,
+            "name": name,
+            "alias": alias,
+            "description": description,
+            "photo_base64": photo_base64,
+            "threat_level": threat_level,
+            "added_at": datetime.now(timezone.utc).isoformat(),
+            "last_seen": None,
+            "notes": notes,
+            "is_active": True
+        }
+        
+        await db.watchlist.insert_one(person_doc)
+        
+        # Return without photo_base64 for response size
+        return {
+            "id": person_id,
+            "name": name,
+            "alias": alias,
+            "threat_level": threat_level,
+            "message": "Person added to watchlist successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Watchlist add error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/watchlist")
+async def get_watchlist(active_only: bool = True):
+    """Get all people in the watchlist"""
+    query = {"is_active": True} if active_only else {}
+    # Exclude full photo for list view, include thumbnail info
+    people = await db.watchlist.find(query, {"_id": 0}).sort("added_at", -1).to_list(100)
+    
+    # Add photo preview indicator
+    for person in people:
+        person["has_photo"] = bool(person.get("photo_base64"))
+        # Truncate photo for list view
+        if person.get("photo_base64"):
+            person["photo_preview"] = person["photo_base64"][:100] + "..."
+            del person["photo_base64"]
+    
+    return {"watchlist": people, "total": len(people)}
+
+@api_router.get("/watchlist/{person_id}")
+async def get_watchlist_person(person_id: str):
+    """Get a specific person from watchlist with full photo"""
+    person = await db.watchlist.find_one({"id": person_id}, {"_id": 0})
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return person
+
+@api_router.put("/watchlist/{person_id}")
+async def update_watchlist_person(
+    person_id: str,
+    name: Optional[str] = Form(None),
+    alias: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    threat_level: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
+    is_active: Optional[bool] = Form(None)
+):
+    """Update a person in the watchlist"""
+    person = await db.watchlist.find_one({"id": person_id})
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+    
+    update_data = {}
+    if name is not None: update_data["name"] = name
+    if alias is not None: update_data["alias"] = alias
+    if description is not None: update_data["description"] = description
+    if threat_level is not None: update_data["threat_level"] = threat_level
+    if notes is not None: update_data["notes"] = notes
+    if is_active is not None: update_data["is_active"] = is_active
+    
+    if update_data:
+        await db.watchlist.update_one({"id": person_id}, {"$set": update_data})
+    
+    return {"message": "Person updated successfully"}
+
+@api_router.delete("/watchlist/{person_id}")
+async def delete_watchlist_person(person_id: str):
+    """Delete a person from the watchlist"""
+    result = await db.watchlist.delete_one({"id": person_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return {"message": "Person removed from watchlist"}
+
+@api_router.get("/watchlist/stats/summary")
+async def get_watchlist_stats():
+    """Get watchlist statistics"""
+    total = await db.watchlist.count_documents({})
+    active = await db.watchlist.count_documents({"is_active": True})
+    high_threat = await db.watchlist.count_documents({"threat_level": "high", "is_active": True})
+    medium_threat = await db.watchlist.count_documents({"threat_level": "medium", "is_active": True})
+    low_threat = await db.watchlist.count_documents({"threat_level": "low", "is_active": True})
+    
+    return {
+        "total": total,
+        "active": active,
+        "inactive": total - active,
+        "by_threat_level": {
+            "high": high_threat,
+            "medium": medium_threat,
+            "low": low_threat
+        }
+    }
+
+async def check_watchlist_match(frame_base64: str) -> dict:
+    """Check if any person in the watchlist matches the frame using GPT Vision"""
+    # Get active watchlist with photos
+    watchlist = await db.watchlist.find(
+        {"is_active": True}, 
+        {"_id": 0, "id": 1, "name": 1, "alias": 1, "photo_base64": 1, "threat_level": 1}
+    ).to_list(50)
+    
+    if not watchlist:
+        return {"match_found": False, "matches": []}
+    
+    try:
+        # Create a prompt with watchlist context
+        watchlist_descriptions = []
+        for i, person in enumerate(watchlist):
+            desc = f"Person {i+1}: {person['name']}"
+            if person.get('alias'):
+                desc += f" (alias: {person['alias']})"
+            watchlist_descriptions.append(desc)
+        
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"watchlist-check-{uuid.uuid4()}",
+            system_message=f"""You are a facial recognition AI. You have a watchlist of known individuals.
+            
+Watchlist:
+{chr(10).join(watchlist_descriptions)}
+
+Compare the provided security camera frame against each watchlist photo.
+Look for facial features, body type, clothing style, and any distinguishing characteristics.
+
+Respond in JSON format:
+{{
+    "match_found": true/false,
+    "matches": [
+        {{
+            "person_index": 1,
+            "confidence": 0.0-1.0,
+            "reasoning": "explanation of match"
+        }}
+    ]
+}}
+
+Only report matches with confidence > 0.6"""
+        ).with_model("openai", "gpt-5.2")
+        
+        # Create image contents - frame + watchlist photos
+        image_contents = [ImageContent(image_base64=frame_base64)]
+        for person in watchlist[:5]:  # Limit to 5 photos to avoid token limits
+            if person.get("photo_base64"):
+                image_contents.append(ImageContent(image_base64=person["photo_base64"]))
+        
+        user_message = UserMessage(
+            text="Compare the first image (security camera frame) against the following watchlist photos. Identify any matches.",
+            file_contents=image_contents
+        )
+        
+        response = await chat.send_message(user_message)
+        
+        # Parse response
+        import json
+        response_text = response.strip()
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+        response_text = response_text.strip()
+        
+        result = json.loads(response_text)
+        
+        # Enrich matches with person data
+        if result.get("match_found") and result.get("matches"):
+            enriched_matches = []
+            for match in result["matches"]:
+                idx = match.get("person_index", 1) - 1
+                if 0 <= idx < len(watchlist):
+                    enriched_matches.append({
+                        "person_id": watchlist[idx]["id"],
+                        "person_name": watchlist[idx]["name"],
+                        "threat_level": watchlist[idx]["threat_level"],
+                        "confidence": match.get("confidence", 0),
+                        "reasoning": match.get("reasoning", "")
+                    })
+            result["matches"] = enriched_matches
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Watchlist check error: {str(e)}")
+        return {"match_found": False, "matches": [], "error": str(e)}
+
+# ============================================
+# LIVE CAMERA FEED PLACEHOLDER
+# ============================================
+# TODO: Implement these endpoints when ready
+#
+# @api_router.post("/cameras")
+# async def add_camera(name: str, rtsp_url: str, location: str):
+#     """Add a new camera feed"""
+#     pass
+#
+# @api_router.get("/cameras")  
+# async def list_cameras():
+#     """List all camera feeds"""
+#     pass
+#
+# @api_router.delete("/cameras/{camera_id}")
+# async def remove_camera(camera_id: str):
+#     """Remove a camera feed"""
+#     pass
+#
+# @api_router.post("/cameras/{camera_id}/start")
+# async def start_camera_monitoring(camera_id: str):
+#     """Start monitoring a camera feed"""
+#     pass
+#
+# @api_router.post("/cameras/{camera_id}/stop")
+# async def stop_camera_monitoring(camera_id: str):
+#     """Stop monitoring a camera feed"""
+#     pass
+# ============================================
+
 # Include the router in the main app
 app.include_router(api_router)
 
