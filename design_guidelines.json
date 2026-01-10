@@ -1,0 +1,146 @@
+{
+  "identity": {
+    "name": "E1",
+    "role": "Anti-AI Creative Designer",
+    "mission": "Create a security interface that feels like a high-end SOC (Security Operations Center), not a generic SaaS dashboard."
+  },
+  "theme_strategy": {
+    "mode": "dark",
+    "archetype": "Electric & Neon (The Digital Panopticon)",
+    "emotional_tone": "Vigilant, Precision, High-Tech, Trustworthy",
+    "core_philosophy": "Information is ammunition. Every pixel must serve the detection of threats."
+  },
+  "typography": {
+    "primary_font": "Manrope",
+    "heading_font": "Rajdhani",
+    "mono_font": "JetBrains Mono",
+    "scale": {
+      "h1": "text-4xl md:text-5xl font-bold tracking-tight uppercase",
+      "h2": "text-3xl font-semibold tracking-tight",
+      "h3": "text-2xl font-medium tracking-normal",
+      "body": "text-base leading-relaxed text-muted-foreground",
+      "mono": "text-sm font-mono text-cyan-400/80"
+    },
+    "import_url": "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Manrope:wght@400;500;700&family=Rajdhani:wght@500;600;700&display=swap"
+  },
+  "colors": {
+    "palette": {
+      "background": "#09090B",
+      "foreground": "#FAFAFA",
+      "card": "#18181B",
+      "card_foreground": "#FAFAFA",
+      "primary": "#3B82F6",
+      "primary_foreground": "#FFFFFF",
+      "secondary": "#27272A",
+      "secondary_foreground": "#FAFAFA",
+      "muted": "#27272A",
+      "muted_foreground": "#A1A1AA",
+      "accent": "#27272A",
+      "accent_foreground": "#FAFAFA",
+      "destructive": "#EF4444",
+      "destructive_foreground": "#FFFFFF",
+      "border": "#27272A",
+      "input": "#27272A",
+      "ring": "#3B82F6"
+    },
+    "semantic": {
+      "alert_critical": "#EF4444",
+      "alert_warning": "#F59E0B",
+      "status_safe": "#10B981",
+      "ai_processing": "#06B6D4",
+      "grid_line": "rgba(255,255,255,0.05)"
+    },
+    "gradients": {
+      "alert_glow": "radial-gradient(circle at center, rgba(239,68,68,0.15) 0%, rgba(9,9,11,0) 70%)",
+      "ai_scan": "linear-gradient(180deg, rgba(6,182,212,0) 0%, rgba(6,182,212,0.2) 50%, rgba(6,182,212,0) 100%)"
+    }
+  },
+  "visual_enhancers": {
+    "glassmorphism": "backdrop-blur-xl bg-black/40 border border-white/10 shadow-2xl",
+    "tracing_beam": "relative after:absolute after:inset-0 after:rounded-lg after:p-[1px] after:bg-gradient-to-r after:from-transparent after:via-cyan-500/50 after:to-transparent after:opacity-0 hover:after:opacity-100 after:transition-opacity",
+    "scanlines": "bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%]",
+    "noise": "opacity-[0.03] pointer-events-none fixed inset-0 z-50 bg-[url('https://grainy-gradients.vercel.app/noise.svg')]"
+  },
+  "layout_system": {
+    "dashboard_grid": "grid grid-cols-1 md:grid-cols-4 lg:grid-cols-12 gap-4 p-4 md:p-6 h-[calc(100vh-4rem)] overflow-hidden",
+    "video_feed_layout": "col-span-1 md:col-span-3 lg:col-span-9 row-span-2 relative rounded-xl overflow-hidden border border-white/10 bg-black",
+    "sidebar_layout": "col-span-1 md:col-span-1 lg:col-span-3 row-span-2 flex flex-col gap-4 h-full overflow-y-auto pr-2",
+    "ticker_layout": "col-span-full h-12 flex items-center border-t border-white/5 bg-black/50 backdrop-blur-md"
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-blue-600 hover:bg-blue-500 text-white font-rajdhani font-semibold tracking-wide uppercase text-sm px-6 py-2 rounded-sm shadow-[0_0_15px_rgba(59,130,246,0.4)] transition-all hover:shadow-[0_0_25px_rgba(59,130,246,0.6)]",
+      "destructive": "bg-red-600/10 border border-red-600/50 text-red-500 hover:bg-red-600 hover:text-white font-rajdhani uppercase tracking-wider transition-colors",
+      "ghost": "hover:bg-white/5 text-muted-foreground hover:text-white"
+    },
+    "cards": {
+      "metric": "bg-card/50 border border-white/5 p-6 rounded-lg hover:border-white/10 transition-colors relative overflow-hidden group",
+      "feed": "relative aspect-video bg-black rounded-lg border border-white/10 overflow-hidden group hover:border-cyan-500/30 transition-colors"
+    },
+    "badges": {
+      "live": "animate-pulse bg-red-500/20 text-red-500 border border-red-500/50 px-2 py-0.5 text-[10px] uppercase tracking-widest font-bold rounded-sm",
+      "ai_active": "bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 px-2 py-0.5 text-[10px] uppercase tracking-widest font-bold rounded-sm"
+    }
+  },
+  "image_urls": {
+    "cctv_feeds": [
+      {
+        "url": "https://images.unsplash.com/photo-1756158453159-74ce93431fba?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "alt": "Convenience Store Aisle CCTV",
+        "category": "feed_main"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1631367771698-606007aecd52?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "alt": "Store Ceiling Camera View",
+        "category": "feed_secondary"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1636249591075-b32a50249ad2?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "alt": "Grocery Aisle Wide Shot",
+        "category": "feed_secondary"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1711978344421-8c73f16d32e2?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "alt": "Black and White Security Footage",
+        "category": "feed_alert"
+      }
+    ],
+    "ui_assets": [
+      {
+        "url": "https://images.pexels.com/photos/17095797/pexels-photo-17095797.jpeg",
+        "alt": "Security Guard Monitoring",
+        "category": "user_avatar"
+      }
+    ]
+  },
+  "motion": {
+    "page_transition": {
+      "initial": { "opacity": 0, "y": 10 },
+      "animate": { "opacity": 1, "y": 0 },
+      "exit": { "opacity": 0, "y": -10 },
+      "transition": { "duration": 0.3, "ease": "easeOut" }
+    },
+    "alert_flash": {
+      "animate": { "opacity": [0, 1, 0] },
+      "transition": { "duration": 0.5, "repeat": "Infinity" }
+    }
+  },
+  "charts_library": "Recharts (Customized for Dark Mode)",
+  "instructions_to_main_agent": [
+    "1. SETUP: Install 'lucide-react' for icons, 'recharts' for analytics, 'framer-motion' for transitions.",
+    "2. FONTS: Add the Google Fonts import to index.css immediately.",
+    "3. THEME: Force dark mode in tailwind.config.js. Do not create a light mode toggle.",
+    "4. LAYOUT: Use the 'Control Room' grid strategy. Avoid scrolling on the main dashboard if possible; make it fit the viewport.",
+    "5. ALERTS: Create a dedicated 'AlertOverlay' component that can be triggered on top of any video feed.",
+    "6. VIDEO: Use the provided Unsplash URLs as placeholders for the video feeds. Overlay a 'REC' indicator and timestamp on them.",
+    "7. NAVIGATION: Create a sidebar navigation (collapsed icon-only on tablet, full on desktop) using the Glassmorphism style."
+  ],
+  "universal_guidelines": [
+    "Do not use gradients for backgrounds; use solid dark colors with subtle noise textures.",
+    "Use 'Rajdhani' font for all headers and numbers to give a technical feel.",
+    "Ensure all text has sufficient contrast against the dark background (min 4.5:1).",
+    "Use 'Cyan' or 'Blue' for AI/System status, and 'Red' ONLY for confirmed threats.",
+    "Add 'data-testid' to all interactive elements.",
+    "Never use rounded-full buttons; use rounded-sm or rounded-md for a stricter, security-focused aesthetic."
+  ]
+}
