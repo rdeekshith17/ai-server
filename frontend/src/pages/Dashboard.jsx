@@ -7,7 +7,8 @@ import {
   ShieldCheck,
   Activity,
   Clock,
-  TrendingUp
+  TrendingUp,
+  Users
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
