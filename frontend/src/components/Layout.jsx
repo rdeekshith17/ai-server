@@ -5,12 +5,14 @@ import {
   AlertTriangle, 
   BarChart3, 
   Shield,
-  Cpu
+  Cpu,
+  Users
 } from "lucide-react";
 
 const navItems = [
   { path: "/", icon: LayoutDashboard, label: "Dashboard" },
   { path: "/upload", icon: Upload, label: "Upload Video" },
+  { path: "/watchlist", icon: Users, label: "Watchlist" },
   { path: "/incidents", icon: AlertTriangle, label: "Incidents" },
   { path: "/analytics", icon: BarChart3, label: "Analytics" },
 ];
