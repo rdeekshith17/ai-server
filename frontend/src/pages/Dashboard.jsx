@@ -205,7 +205,7 @@ export default function Dashboard() {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard 
           icon={Video} 
           label="Total Videos" 
@@ -229,6 +229,12 @@ export default function Dashboard() {
           label="Safe Analyses" 
           value={stats?.safe_count || 0}
           color="#10b981"
+        />
+        <StatCard 
+          icon={Users} 
+          label="Watchlist" 
+          value={watchlistStats?.active || 0}
+          color="#8b5cf6"
         />
       </div>
 
