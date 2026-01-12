@@ -7,14 +7,20 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone
 import base64
 import cv2
 import tempfile
 import asyncio
+import numpy as np
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+
+# ML Model imports
+from ultralytics import YOLO
+import warnings
+warnings.filterwarnings('ignore')
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -26,6 +32,37 @@ db = client[os.environ.get('DB_NAME', 'test_database')]
 
 # LLM Key
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
+
+# ============================================
+# ML MODELS INITIALIZATION
+# ============================================
+# YOLO model for person detection and tracking
+yolo_model = None
+deepface_initialized = False
+
+def get_yolo_model():
+    """Lazy load YOLO model"""
+    global yolo_model
+    if yolo_model is None:
+        try:
+            yolo_model = YOLO('yolov8n.pt')  # Nano model for speed
+            logger.info("YOLO model loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load YOLO model: {e}")
+    return yolo_model
+
+def init_deepface():
+    """Initialize DeepFace for face recognition"""
+    global deepface_initialized
+    if not deepface_initialized:
+        try:
+            # Import here to avoid loading at startup
+            from deepface import DeepFace
+            deepface_initialized = True
+            logger.info("DeepFace initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize DeepFace: {e}")
+    return deepface_initialized
 
 # Create the main app without a prefix
 app = FastAPI()
