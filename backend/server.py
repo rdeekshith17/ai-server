@@ -405,6 +405,115 @@ def extract_frames_from_video(video_path: str, max_frames: int = 10) -> List[tup
     cap.release()
     return frames, total_frames, duration
 
+async def analyze_frame_comprehensive(frame_base64: str, frame_idx: int, video_name: str, check_watchlist: bool = True) -> dict:
+    """
+    Comprehensive frame analysis using:
+    1. YOLO - Person detection and tracking
+    2. DeepFace - Face recognition against watchlist
+    3. GPT-5.2 Vision - Behavior analysis
+    """
+    import json
+    
+    # Decode frame
+    frame_data = base64.b64decode(frame_base64)
+    frame_array = np.frombuffer(frame_data, np.uint8)
+    frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
+    
+    results = {
+        "frame_index": frame_idx,
+        "analysis_methods": [],
+        "is_suspicious": False,
+        "severity": "safe",
+        "confidence": 0.0,
+        "description": "",
+        "behaviors_detected": [],
+        "reasoning": "",
+        "ml_detections": {}
+    }
+    
+    # 1. YOLO Person Detection
+    try:
+        yolo_results = detect_persons_yolo(frame)
+        results["ml_detections"]["yolo"] = yolo_results
+        results["analysis_methods"].append("YOLO")
+        
+        # Analyze behavior patterns from YOLO
+        if yolo_results.get("count", 0) > 0:
+            behavior_analysis = analyze_suspicious_behavior(yolo_results.get("persons", []))
+            results["ml_detections"]["behavior_analysis"] = behavior_analysis
+            
+            if behavior_analysis.get("risk_score", 0) > 0.3:
+                results["behaviors_detected"].extend(behavior_analysis.get("behaviors", []))
+                results["confidence"] = max(results["confidence"], behavior_analysis.get("risk_score", 0))
+    except Exception as e:
+        logger.error(f"YOLO analysis error: {e}")
+        results["ml_detections"]["yolo"] = {"error": str(e)}
+    
+    # 2. DeepFace Watchlist Check
+    watchlist_matches = []
+    if check_watchlist:
+        try:
+            # Get active watchlist
+            watchlist = await db.watchlist.find(
+                {"is_active": True}, 
+                {"_id": 0, "id": 1, "name": 1, "photo_base64": 1, "threat_level": 1}
+            ).to_list(20)
+            
+            if watchlist:
+                watchlist_matches = await compare_face_with_watchlist(frame, watchlist)
+                results["ml_detections"]["face_recognition"] = {
+                    "matches": watchlist_matches,
+                    "watchlist_checked": len(watchlist)
+                }
+                results["analysis_methods"].append("DeepFace")
+                
+                if watchlist_matches:
+                    results["is_suspicious"] = True
+                    results["severity"] = "critical"
+                    results["confidence"] = max(results["confidence"], 0.9)
+                    for match in watchlist_matches:
+                        results["behaviors_detected"].append(
+                            f"WATCHLIST MATCH: {match['person_name']} ({match['threat_level']} threat)"
+                        )
+        except Exception as e:
+            logger.error(f"Face recognition error: {e}")
+            results["ml_detections"]["face_recognition"] = {"error": str(e)}
+    
+    # 3. GPT-5.2 Vision Analysis
+    try:
+        gpt_result = await analyze_frame_with_gpt(frame_base64, frame_idx, video_name)
+        results["ml_detections"]["gpt_vision"] = gpt_result
+        results["analysis_methods"].append("GPT-5.2")
+        
+        # Merge GPT results
+        if gpt_result.get("is_suspicious") or gpt_result.get("severity") in ["critical", "warning"]:
+            results["is_suspicious"] = True
+            if gpt_result.get("severity") == "critical":
+                results["severity"] = "critical"
+            elif results["severity"] != "critical":
+                results["severity"] = gpt_result.get("severity", "warning")
+        
+        results["confidence"] = max(results["confidence"], gpt_result.get("confidence", 0))
+        results["description"] = gpt_result.get("description", "")
+        results["reasoning"] = gpt_result.get("reasoning", "")
+        
+        # Add GPT detected behaviors
+        gpt_behaviors = gpt_result.get("behaviors_detected", [])
+        for behavior in gpt_behaviors:
+            if behavior not in results["behaviors_detected"]:
+                results["behaviors_detected"].append(behavior)
+                
+    except Exception as e:
+        logger.error(f"GPT analysis error: {e}")
+        results["ml_detections"]["gpt_vision"] = {"error": str(e)}
+    
+    # Final severity determination
+    if watchlist_matches:
+        results["severity"] = "critical"
+        results["description"] = f"WATCHLIST ALERT: {', '.join([m['person_name'] for m in watchlist_matches])} detected. " + results.get("description", "")
+    
+    return results
+
 async def analyze_frame_with_gpt(frame_base64: str, frame_idx: int, video_name: str) -> dict:
     """Analyze a single frame using GPT-5.2 Vision"""
     try:
