@@ -926,6 +926,7 @@ async def delete_video(video_id: str):
 async def get_incidents(
     severity: Optional[str] = None,
     store_type: Optional[str] = None,
+    include_image: bool = False,
     limit: int = 50
 ):
     """Get all incidents with optional filtering"""
@@ -935,16 +936,45 @@ async def get_incidents(
     if store_type:
         query["store_type"] = store_type
     
-    incidents = await db.incidents.find(query, {"_id": 0}).sort("timestamp", -1).to_list(limit)
+    # Exclude large frame_image by default for list view
+    projection = {"_id": 0}
+    if not include_image:
+        projection["frame_image"] = 0
+    
+    incidents = await db.incidents.find(query, projection).sort("timestamp", -1).to_list(limit)
+    
+    # Add has_image flag
+    for incident in incidents:
+        if not include_image:
+            incident["has_image"] = await db.incidents.count_documents(
+                {"id": incident["id"], "frame_image": {"$exists": True, "$ne": None}}
+            ) > 0
+    
     return {"incidents": incidents, "total": len(incidents)}
 
 @api_router.get("/incidents/{incident_id}")
 async def get_incident(incident_id: str):
-    """Get a specific incident"""
+    """Get a specific incident with full details including frame image"""
     incident = await db.incidents.find_one({"id": incident_id}, {"_id": 0})
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
     return incident
+
+@api_router.get("/incidents/{incident_id}/image")
+async def get_incident_image(incident_id: str):
+    """Get just the frame image for an incident"""
+    incident = await db.incidents.find_one(
+        {"id": incident_id}, 
+        {"_id": 0, "frame_image": 1}
+    )
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    
+    frame_image = incident.get("frame_image")
+    if not frame_image:
+        raise HTTPException(status_code=404, detail="No image available for this incident")
+    
+    return {"image": frame_image}
 
 @api_router.delete("/incidents/{incident_id}")
 async def delete_incident(incident_id: str):
