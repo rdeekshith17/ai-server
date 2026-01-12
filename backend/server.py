@@ -322,7 +322,7 @@ def analyze_suspicious_behavior(persons: List[Dict], frame_history: List = None)
     risk_score = 0.0
     
     if not persons:
-        return {"indicators": [], "risk_score": 0.0, "behaviors": []}
+        return {"indicators": [], "risk_score": 0.0, "behaviors": [], "person_count": 0}
     
     # Check for multiple persons (potential coordinated theft)
     if len(persons) >= 3:
@@ -336,7 +336,7 @@ def analyze_suspicious_behavior(persons: List[Dict], frame_history: List = None)
         risk_score += 0.15
     
     # Check for large person detection (close to camera - potential concealment)
-    large_persons = [p for p in persons if p.get('area_ratio', 0) > 0.15]
+    large_persons = [p for p in persons if float(p.get('area_ratio', 0)) > 0.15]
     if large_persons:
         suspicious_indicators.append("close_proximity_detected")
         risk_score += 0.1
@@ -346,7 +346,7 @@ def analyze_suspicious_behavior(persons: List[Dict], frame_history: List = None)
         centers = [p.get('center', [0, 0]) for p in persons]
         for i, c1 in enumerate(centers):
             for j, c2 in enumerate(centers[i+1:], i+1):
-                distance = np.sqrt((c1[0] - c2[0])**2 + (c1[1] - c2[1])**2)
+                distance = float(np.sqrt((c1[0] - c2[0])**2 + (c1[1] - c2[1])**2))
                 if distance < 150:  # Close together
                     suspicious_indicators.append("group_clustering")
                     risk_score += 0.15
@@ -364,7 +364,7 @@ def analyze_suspicious_behavior(persons: List[Dict], frame_history: List = None)
     
     return {
         "indicators": suspicious_indicators,
-        "risk_score": min(risk_score, 1.0),
+        "risk_score": float(min(risk_score, 1.0)),
         "behaviors": behaviors,
         "person_count": len(persons)
     }
