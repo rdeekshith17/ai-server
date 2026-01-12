@@ -786,13 +786,16 @@ async def analyze_video(video_id: str, max_frames: int = 8, use_ml: bool = True)
             "status": "completed",
             "frames_analyzed": analyzed_count,
             "incidents_detected": len(incidents),
+            "ml_summary": ml_summary,
+            "analysis_methods": ["YOLO", "DeepFace", "GPT-5.2"] if use_ml else ["GPT-5.2"],
             "incidents": [
                 {
                     "id": i["id"],
                     "severity": i["severity"],
                     "description": i["description"],
                     "confidence": i["confidence"],
-                    "behaviors": i["behaviors_detected"]
+                    "behaviors": i["behaviors_detected"],
+                    "methods": i.get("analysis_methods", [])
                 } for i in incidents
             ]
         }
@@ -806,6 +809,37 @@ async def analyze_video(video_id: str, max_frames: int = 8, use_ml: bool = True)
             {"$set": {"status": "failed"}}
         )
         raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/ml/status")
+async def get_ml_status():
+    """Get status of all ML models"""
+    status = {
+        "yolo": {
+            "loaded": yolo_model is not None,
+            "model": "YOLOv8n",
+            "purpose": "Person detection and tracking"
+        },
+        "deepface": {
+            "initialized": deepface_initialized,
+            "model": "VGG-Face",
+            "purpose": "Face recognition for watchlist matching"
+        },
+        "gpt_vision": {
+            "available": EMERGENT_LLM_KEY is not None,
+            "model": "GPT-5.2 Vision",
+            "purpose": "Behavior analysis and scene understanding"
+        }
+    }
+    
+    # Try to initialize models
+    if not status["yolo"]["loaded"]:
+        try:
+            get_yolo_model()
+            status["yolo"]["loaded"] = yolo_model is not None
+        except:
+            pass
+    
+    return status
 
 @api_router.get("/videos")
 async def get_videos():
