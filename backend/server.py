@@ -661,8 +661,11 @@ async def upload_video(
         raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.post("/videos/{video_id}/analyze")
-async def analyze_video(video_id: str, max_frames: int = 8):
-    """Analyze an uploaded video for shoplifting behavior"""
+async def analyze_video(video_id: str, max_frames: int = 8, use_ml: bool = True):
+    """
+    Analyze an uploaded video for shoplifting behavior
+    Uses combined ML approach: YOLO + DeepFace + GPT-5.2 Vision
+    """
     try:
         # Get video record
         video = await db.videos.find_one({"id": video_id}, {"_id": 0})
@@ -675,7 +678,7 @@ async def analyze_video(video_id: str, max_frames: int = 8):
         # Update status to processing
         await db.videos.update_one(
             {"id": video_id},
-            {"$set": {"status": "processing"}}
+            {"$set": {"status": "processing", "analysis_mode": "comprehensive" if use_ml else "gpt_only"}}
         )
         
         tmp_path = video.get("temp_path")
@@ -694,10 +697,36 @@ async def analyze_video(video_id: str, max_frames: int = 8):
         
         incidents = []
         analyzed_count = 0
+        ml_summary = {
+            "yolo_detections": 0,
+            "faces_detected": 0,
+            "watchlist_matches": 0,
+            "gpt_analyses": 0
+        }
         
         # Analyze each frame
         for frame_idx, frame_base64, timestamp in frames_data:
-            result = await analyze_frame_with_gpt(frame_base64, frame_idx, video.get("filename", "video"))
+            # Use comprehensive analysis with all ML models
+            if use_ml:
+                result = await analyze_frame_comprehensive(
+                    frame_base64, 
+                    frame_idx, 
+                    video.get("filename", "video"),
+                    check_watchlist=True
+                )
+                
+                # Track ML usage
+                ml_detections = result.get("ml_detections", {})
+                if ml_detections.get("yolo", {}).get("count", 0) > 0:
+                    ml_summary["yolo_detections"] += ml_detections["yolo"]["count"]
+                if ml_detections.get("face_recognition", {}).get("matches"):
+                    ml_summary["watchlist_matches"] += len(ml_detections["face_recognition"]["matches"])
+                if "gpt_vision" in ml_detections:
+                    ml_summary["gpt_analyses"] += 1
+            else:
+                result = await analyze_frame_with_gpt(frame_base64, frame_idx, video.get("filename", "video"))
+                ml_summary["gpt_analyses"] += 1
+            
             analyzed_count += 1
             
             # Update progress
@@ -718,11 +747,13 @@ async def analyze_video(video_id: str, max_frames: int = 8):
                     "confidence": result.get("confidence", 0.5),
                     "frame_index": frame_idx,
                     "frame_time_seconds": timestamp,
-                    "thumbnail_base64": frame_base64[:100] + "..." if frame_base64 else None,  # Truncate for storage
+                    "thumbnail_base64": frame_base64[:100] + "..." if frame_base64 else None,
                     "behaviors_detected": result.get("behaviors_detected", []),
                     "reasoning": result.get("reasoning", ""),
                     "location": "Main Floor",
-                    "store_type": video.get("store_type", "convenience")
+                    "store_type": video.get("store_type", "convenience"),
+                    "analysis_methods": result.get("analysis_methods", ["GPT-5.2"]),
+                    "ml_detections": result.get("ml_detections", {})
                 }
                 incidents.append(incident)
                 await db.incidents.insert_one(incident)
@@ -734,7 +765,8 @@ async def analyze_video(video_id: str, max_frames: int = 8):
                 "$set": {
                     "status": "completed",
                     "analyzed_frames": analyzed_count,
-                    "incidents_count": len(incidents)
+                    "incidents_count": len(incidents),
+                    "ml_summary": ml_summary
                 }
             }
         )
