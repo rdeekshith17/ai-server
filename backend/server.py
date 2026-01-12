@@ -196,19 +196,22 @@ def detect_persons_yolo(frame: np.ndarray) -> Dict[str, Any]:
                 elif center_x > frame_w * 0.66:
                     position = "right"
                 
+                # Calculate area ratio - convert numpy types to Python native
+                area_ratio = float((width * height) / (frame_w * frame_h))
+                
                 persons.append({
                     "bbox": [int(x1), int(y1), int(x2), int(y2)],
-                    "confidence": round(confidence, 2),
+                    "confidence": round(float(confidence), 2),
                     "center": [int(center_x), int(center_y)],
                     "size": [int(width), int(height)],
                     "position": position,
-                    "area_ratio": round((width * height) / (frame_w * frame_h), 4)
+                    "area_ratio": round(area_ratio, 4)
                 })
         
         return {
             "persons": persons,
             "count": len(persons),
-            "frame_size": [frame.shape[1], frame.shape[0]]
+            "frame_size": [int(frame.shape[1]), int(frame.shape[0])]
         }
     except Exception as e:
         logger.error(f"YOLO detection error: {e}")
