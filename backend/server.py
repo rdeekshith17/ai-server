@@ -158,6 +158,214 @@ class WatchlistPerson(BaseModel):
 # - rtsp://ip_address:554/live/ch00_0
 # ============================================
 
+# ============================================
+# ML DETECTION FUNCTIONS
+# ============================================
+
+def detect_persons_yolo(frame: np.ndarray) -> Dict[str, Any]:
+    """
+    Use YOLO to detect persons in frame
+    Returns: dict with person count, bounding boxes, and tracking info
+    """
+    try:
+        model = get_yolo_model()
+        if model is None:
+            return {"persons": [], "count": 0, "error": "YOLO model not loaded"}
+        
+        # Run inference
+        results = model(frame, verbose=False, classes=[0])  # class 0 = person
+        
+        persons = []
+        for result in results:
+            boxes = result.boxes
+            for box in boxes:
+                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                confidence = float(box.conf[0])
+                
+                # Calculate center and size
+                center_x = (x1 + x2) / 2
+                center_y = (y1 + y2) / 2
+                width = x2 - x1
+                height = y2 - y1
+                
+                # Determine position in frame
+                frame_h, frame_w = frame.shape[:2]
+                position = "center"
+                if center_x < frame_w * 0.33:
+                    position = "left"
+                elif center_x > frame_w * 0.66:
+                    position = "right"
+                
+                persons.append({
+                    "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                    "confidence": round(confidence, 2),
+                    "center": [int(center_x), int(center_y)],
+                    "size": [int(width), int(height)],
+                    "position": position,
+                    "area_ratio": round((width * height) / (frame_w * frame_h), 4)
+                })
+        
+        return {
+            "persons": persons,
+            "count": len(persons),
+            "frame_size": [frame.shape[1], frame.shape[0]]
+        }
+    except Exception as e:
+        logger.error(f"YOLO detection error: {e}")
+        return {"persons": [], "count": 0, "error": str(e)}
+
+def detect_faces_deepface(frame: np.ndarray) -> List[Dict]:
+    """
+    Detect faces in frame using DeepFace
+    Returns: list of detected faces with embeddings
+    """
+    try:
+        from deepface import DeepFace
+        
+        # Detect faces
+        faces = DeepFace.extract_faces(
+            frame, 
+            detector_backend='opencv',
+            enforce_detection=False
+        )
+        
+        detected_faces = []
+        for face in faces:
+            if face.get('confidence', 0) > 0.5:
+                facial_area = face.get('facial_area', {})
+                detected_faces.append({
+                    "bbox": [
+                        facial_area.get('x', 0),
+                        facial_area.get('y', 0),
+                        facial_area.get('x', 0) + facial_area.get('w', 0),
+                        facial_area.get('y', 0) + facial_area.get('h', 0)
+                    ],
+                    "confidence": round(face.get('confidence', 0), 2)
+                })
+        
+        return detected_faces
+    except Exception as e:
+        logger.error(f"DeepFace detection error: {e}")
+        return []
+
+async def compare_face_with_watchlist(frame: np.ndarray, watchlist_photos: List[Dict]) -> List[Dict]:
+    """
+    Compare detected faces against watchlist using DeepFace
+    Returns: list of matches with person info and confidence
+    """
+    matches = []
+    
+    try:
+        from deepface import DeepFace
+        
+        # Save frame temporarily
+        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+            cv2.imwrite(tmp.name, frame)
+            frame_path = tmp.name
+        
+        for person in watchlist_photos:
+            try:
+                # Decode watchlist photo
+                photo_data = base64.b64decode(person['photo_base64'])
+                photo_array = np.frombuffer(photo_data, np.uint8)
+                watchlist_img = cv2.imdecode(photo_array, cv2.IMREAD_COLOR)
+                
+                if watchlist_img is None:
+                    continue
+                
+                # Save watchlist photo temporarily
+                with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp2:
+                    cv2.imwrite(tmp2.name, watchlist_img)
+                    watchlist_path = tmp2.name
+                
+                # Compare faces
+                result = DeepFace.verify(
+                    frame_path, 
+                    watchlist_path,
+                    model_name='VGG-Face',
+                    enforce_detection=False
+                )
+                
+                if result.get('verified', False):
+                    matches.append({
+                        "person_id": person['id'],
+                        "person_name": person['name'],
+                        "threat_level": person['threat_level'],
+                        "confidence": round(1 - result.get('distance', 1), 2),
+                        "match_type": "face_recognition"
+                    })
+                
+                # Cleanup
+                os.remove(watchlist_path)
+                
+            except Exception as e:
+                logger.debug(f"Face comparison error for {person.get('name')}: {e}")
+                continue
+        
+        # Cleanup
+        os.remove(frame_path)
+        
+    except Exception as e:
+        logger.error(f"Watchlist comparison error: {e}")
+    
+    return matches
+
+def analyze_suspicious_behavior(persons: List[Dict], frame_history: List = None) -> Dict:
+    """
+    Analyze detected persons for suspicious behavior patterns
+    Uses person positions, movements, and grouping
+    """
+    suspicious_indicators = []
+    risk_score = 0.0
+    
+    if not persons:
+        return {"indicators": [], "risk_score": 0.0, "behaviors": []}
+    
+    # Check for multiple persons (potential coordinated theft)
+    if len(persons) >= 3:
+        suspicious_indicators.append("multiple_persons_detected")
+        risk_score += 0.2
+    
+    # Check for persons near edges (potential exit preparation)
+    edge_persons = [p for p in persons if p.get('position') in ['left', 'right']]
+    if edge_persons:
+        suspicious_indicators.append("persons_near_exits")
+        risk_score += 0.15
+    
+    # Check for large person detection (close to camera - potential concealment)
+    large_persons = [p for p in persons if p.get('area_ratio', 0) > 0.15]
+    if large_persons:
+        suspicious_indicators.append("close_proximity_detected")
+        risk_score += 0.1
+    
+    # Detect clustering (group activity)
+    if len(persons) >= 2:
+        centers = [p.get('center', [0, 0]) for p in persons]
+        for i, c1 in enumerate(centers):
+            for j, c2 in enumerate(centers[i+1:], i+1):
+                distance = np.sqrt((c1[0] - c2[0])**2 + (c1[1] - c2[1])**2)
+                if distance < 150:  # Close together
+                    suspicious_indicators.append("group_clustering")
+                    risk_score += 0.15
+                    break
+    
+    behaviors = []
+    if "multiple_persons_detected" in suspicious_indicators:
+        behaviors.append("Coordinated group activity possible")
+    if "persons_near_exits" in suspicious_indicators:
+        behaviors.append("Persons positioned near exits")
+    if "close_proximity_detected" in suspicious_indicators:
+        behaviors.append("Close proximity to camera/merchandise")
+    if "group_clustering" in suspicious_indicators:
+        behaviors.append("Group clustering detected")
+    
+    return {
+        "indicators": suspicious_indicators,
+        "risk_score": min(risk_score, 1.0),
+        "behaviors": behaviors,
+        "person_count": len(persons)
+    }
+
 # Helper functions
 def extract_frames_from_video(video_path: str, max_frames: int = 10) -> List[tuple]:
     """Extract frames from video at regular intervals"""
