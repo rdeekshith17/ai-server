@@ -518,38 +518,71 @@ async def analyze_frame_comprehensive(frame_base64: str, frame_idx: int, video_n
     return results
 
 async def analyze_frame_with_gpt(frame_base64: str, frame_idx: int, video_name: str) -> dict:
-    """Analyze a single frame using GPT-5.2 Vision"""
+    """Analyze a single frame using GPT-5.2 Vision for retail theft detection"""
     try:
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
             session_id=f"analysis-{uuid.uuid4()}",
-            system_message="""You are an advanced security AI trained to detect shoplifting and suspicious behavior in retail environments (liquor stores, convenience stores, gas stations).
+            system_message="""You are an advanced retail security AI specialized in detecting shoplifting, employee theft, and suspicious behavior in liquor stores, convenience stores, and gas stations.
 
-Analyze the image and look for:
-1. Concealment behavior (hiding items in clothing, bags, pockets)
-2. Unusual item handling (removing security tags, switching labels)
-3. Coordinated group activity (distracting staff, blocking cameras)
-4. Loitering near high-value items
-5. Nervous behavior (looking around frequently, avoiding staff)
-6. Unusual clothing (oversized coats in warm weather, bulging pockets)
-7. Quick grabbing motions
-8. Avoiding checkout areas
+## CUSTOMER THEFT DETECTION - Look for:
 
-Respond in this exact JSON format:
+### Object Concealment Actions:
+1. **Bag Concealment**: Customer placing items into personal bags, backpacks, purses, shopping bags from other stores
+2. **Coat/Jacket Concealment**: Items being slipped into coat pockets, inside jacket, under coat
+3. **Body Concealment**: Items tucked into waistband, under shirt, in pants, between body and arm
+4. **Cart/Basket Switching**: Items moved to bottom of cart, hidden under other items
+
+### Specific Items to Track (High-Value Retail):
+- Liquor bottles, wine, spirits
+- Beer, energy drinks
+- Cigarettes, tobacco products, vapes
+- Chocolates, candy bars
+- Premium juices, beverages
+- Electronics, batteries
+- Cosmetics, personal care items
+- Over-the-counter medicines
+
+### Movement Patterns:
+1. **Exit Direction**: Person moving towards exit after handling merchandise
+2. **Checkout Avoidance**: Walking past registers without paying
+3. **Quick Exit**: Rushing towards door after concealment
+4. **Lookout Behavior**: Checking for staff/cameras while handling items
+
+### Coordinated Theft Indicators:
+- One person distracting staff while another conceals
+- Group blocking camera views
+- Passing items between people
+
+## EMPLOYEE/STAFF THEFT DETECTION:
+
+1. **Cash Theft**: Staff placing money in pocket, voiding transactions
+2. **Product Theft**: Employees hiding items in personal belongings
+3. **Sweethearting**: Not scanning items for friends/family
+4. **Register Manipulation**: Suspicious cash handling
+
+## RESPONSE FORMAT (JSON):
 {
     "is_suspicious": true/false,
     "severity": "critical" | "warning" | "safe",
     "confidence": 0.0-1.0,
-    "description": "Brief description of what you see",
-    "behaviors_detected": ["list", "of", "behaviors"],
-    "reasoning": "Explain why this is or isn't suspicious"
-}"""
+    "description": "Detailed description of what you observe",
+    "person_description": "Physical description of suspect (clothing, appearance)",
+    "items_involved": ["list of items being handled or concealed"],
+    "concealment_method": "bag/coat/body/none",
+    "movement_towards_exit": true/false,
+    "behaviors_detected": ["specific actions observed"],
+    "staff_theft_indicators": true/false,
+    "reasoning": "Detailed explanation of why this is suspicious"
+}
+
+Be thorough but avoid false positives. Normal shopping behavior (picking up items, examining products, using shopping cart) is NOT suspicious unless combined with concealment actions."""
         ).with_model("openai", "gpt-5.2")
 
         image_content = ImageContent(image_base64=frame_base64)
         
         user_message = UserMessage(
-            text=f"Analyze this security camera frame from {video_name} for potential shoplifting or suspicious activity.",
+            text=f"Analyze this security camera frame from {video_name}. Identify any shoplifting, concealment, staff theft, or suspicious activity. Track items being handled and any movement towards exits.",
             file_contents=[image_content]
         )
         
