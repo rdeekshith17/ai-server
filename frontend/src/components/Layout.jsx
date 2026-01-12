@@ -59,17 +59,23 @@ export default function Layout() {
           ))}
         </nav>
 
-        {/* AI Status */}
-        <div className="p-4 border-t border-white/5">
-          <div className="flex items-center gap-3 p-3 rounded-md bg-cyan-500/10 border border-cyan-500/20">
-            <Cpu className="w-5 h-5 text-cyan-400" />
-            <div>
-              <p className="text-xs text-cyan-400 font-medium uppercase tracking-wider">
-                AI System
-              </p>
-              <p className="text-xs text-muted-foreground">GPT-5.2 Vision Active</p>
-            </div>
-            <div className="ml-auto w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+        {/* ML Models Status */}
+        <div className="p-4 border-t border-white/5 space-y-2">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-widest mb-2">ML Models</p>
+          
+          <div className="flex items-center gap-2 p-2 rounded-md bg-purple-500/10 border border-purple-500/20">
+            <div className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
+            <span className="text-[10px] text-purple-400 uppercase tracking-wider">YOLO v8</span>
+          </div>
+          
+          <div className="flex items-center gap-2 p-2 rounded-md bg-pink-500/10 border border-pink-500/20">
+            <div className="w-2 h-2 rounded-full bg-pink-400 animate-pulse" />
+            <span className="text-[10px] text-pink-400 uppercase tracking-wider">DeepFace</span>
+          </div>
+          
+          <div className="flex items-center gap-2 p-2 rounded-md bg-cyan-500/10 border border-cyan-500/20">
+            <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+            <span className="text-[10px] text-cyan-400 uppercase tracking-wider">GPT-5.2</span>
           </div>
         </div>
       </aside>
