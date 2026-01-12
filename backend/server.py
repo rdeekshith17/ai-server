@@ -773,6 +773,9 @@ async def analyze_video(video_id: str, max_frames: int = 8, use_ml: bool = True)
             
             # If suspicious, create incident
             if result.get("is_suspicious") or result.get("severity") in ["critical", "warning"]:
+                # Get GPT analysis details
+                gpt_result = result.get("ml_detections", {}).get("gpt_vision", {})
+                
                 incident = {
                     "id": str(uuid.uuid4()),
                     "video_id": video_id,
@@ -783,13 +786,22 @@ async def analyze_video(video_id: str, max_frames: int = 8, use_ml: bool = True)
                     "confidence": result.get("confidence", 0.5),
                     "frame_index": frame_idx,
                     "frame_time_seconds": timestamp,
-                    "thumbnail_base64": frame_base64[:100] + "..." if frame_base64 else None,
+                    # Store full frame image for incident display
+                    "frame_image": frame_base64,
                     "behaviors_detected": result.get("behaviors_detected", []),
                     "reasoning": result.get("reasoning", ""),
                     "location": "Main Floor",
                     "store_type": video.get("store_type", "convenience"),
                     "analysis_methods": result.get("analysis_methods", ["GPT-5.2"]),
-                    "ml_detections": result.get("ml_detections", {})
+                    # Enhanced detection details
+                    "person_description": gpt_result.get("person_description", ""),
+                    "items_involved": gpt_result.get("items_involved", []),
+                    "concealment_method": gpt_result.get("concealment_method", "none"),
+                    "movement_towards_exit": gpt_result.get("movement_towards_exit", False),
+                    "staff_theft": gpt_result.get("staff_theft_indicators", False),
+                    # YOLO detection data
+                    "persons_detected": result.get("ml_detections", {}).get("yolo", {}).get("count", 0),
+                    "person_positions": result.get("ml_detections", {}).get("yolo", {}).get("persons", [])
                 }
                 incidents.append(incident)
                 await db.incidents.insert_one(incident)
