@@ -1670,35 +1670,216 @@ Only report matches with confidence > 0.6"""
         return {"match_found": False, "matches": [], "error": str(e)}
 
 # ============================================
-# LIVE CAMERA FEED PLACEHOLDER
+# LIVE FEED ENDPOINTS
 # ============================================
-# TODO: Implement these endpoints when ready
-#
-# @api_router.post("/cameras")
-# async def add_camera(name: str, rtsp_url: str, location: str):
-#     """Add a new camera feed"""
-#     pass
-#
-# @api_router.get("/cameras")  
-# async def list_cameras():
-#     """List all camera feeds"""
-#     pass
-#
-# @api_router.delete("/cameras/{camera_id}")
-# async def remove_camera(camera_id: str):
-#     """Remove a camera feed"""
-#     pass
-#
-# @api_router.post("/cameras/{camera_id}/start")
-# async def start_camera_monitoring(camera_id: str):
-#     """Start monitoring a camera feed"""
-#     pass
-#
-# @api_router.post("/cameras/{camera_id}/stop")
-# async def stop_camera_monitoring(camera_id: str):
-#     """Stop monitoring a camera feed"""
-#     pass
-# ============================================
+
+@api_router.post("/cameras")
+async def add_camera(
+    name: str = Form(...),
+    source: str = Form(...),
+    location: str = Form("Main Floor"),
+    store_type: str = Form("convenience")
+):
+    """Add a new camera feed"""
+    camera_id = str(uuid.uuid4())
+    camera_doc = {
+        "id": camera_id,
+        "name": name,
+        "source": source,
+        "location": location,
+        "store_type": store_type,
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "last_frame_at": None,
+        "status": "inactive"
+    }
+    
+    await db.cameras.insert_one(camera_doc)
+    
+    return {
+        "id": camera_id,
+        "name": name,
+        "source": source,
+        "message": "Camera added successfully"
+    }
+
+@api_router.get("/cameras")
+async def list_cameras():
+    """List all camera feeds"""
+    cameras = await db.cameras.find({}, {"_id": 0}).to_list(50)
+    return {"cameras": cameras, "total": len(cameras)}
+
+@api_router.get("/cameras/{camera_id}")
+async def get_camera(camera_id: str):
+    """Get a specific camera"""
+    camera = await db.cameras.find_one({"id": camera_id}, {"_id": 0})
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    return camera
+
+@api_router.delete("/cameras/{camera_id}")
+async def delete_camera(camera_id: str):
+    """Delete a camera feed"""
+    result = await db.cameras.delete_one({"id": camera_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    
+    # Remove from live feeds if active
+    if camera_id in live_feeds:
+        del live_feeds[camera_id]
+    
+    return {"message": "Camera deleted"}
+
+@api_router.post("/live/process-frame")
+async def process_live_frame(
+    frame: UploadFile = File(...),
+    camera_id: Optional[str] = Form(None),
+    draw_overlay: bool = Form(True)
+):
+    """Process a single frame from live feed with real-time detection"""
+    try:
+        # Read frame
+        content = await frame.read()
+        nparr = np.frombuffer(content, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            raise HTTPException(status_code=400, detail="Invalid image")
+        
+        # Process frame with detection
+        result = process_frame_with_detection(img, draw_overlay=draw_overlay)
+        
+        # Store in live feed state
+        if camera_id:
+            live_feeds[camera_id] = {
+                "last_result": result,
+                "last_update": datetime.now(timezone.utc).isoformat()
+            }
+            await db.cameras.update_one(
+                {"id": camera_id},
+                {"$set": {"last_frame_at": datetime.now(timezone.utc).isoformat(), "status": "active"}}
+            )
+        
+        # Create incident if critical threat detected
+        if result.get("scene_analysis", {}).get("scene_status") == "critical":
+            for det in result.get("detections", []):
+                if det.get("threat_level") == "critical":
+                    incident = {
+                        "id": str(uuid.uuid4()),
+                        "video_id": camera_id or "live_feed",
+                        "video_name": f"Live Feed - {camera_id or 'Unknown'}",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "severity": "critical",
+                        "description": f"Live detection: {', '.join(det.get('activities', []))}",
+                        "confidence": det.get("threat_score", 0.8),
+                        "frame_index": 0,
+                        "frame_time_seconds": 0,
+                        "frame_image": result.get("frame_annotated"),
+                        "behaviors_detected": det.get("activities", []),
+                        "reasoning": "Real-time threat detection by Decision Engine",
+                        "location": "Live Camera",
+                        "store_type": "convenience",
+                        "analysis_methods": ["YOLO", "Pose Estimation", "Decision Engine"],
+                        "persons_detected": len(result.get("detections", [])),
+                        "concealment_method": "body" if "item_in_pocket" in det.get("activities", []) else "none",
+                        "staff_theft": False,
+                        "movement_towards_exit": det.get("position") in ["left_edge", "right_edge"]
+                    }
+                    await db.incidents.insert_one(incident)
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Live frame processing error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.post("/live/process-video-frame")
+async def process_video_frame(video_id: str, frame_number: int = 0):
+    """Process a specific frame from an uploaded video with live detection overlay"""
+    try:
+        video = await db.videos.find_one({"id": video_id}, {"_id": 0})
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+        
+        tmp_path = video.get("temp_path")
+        if not tmp_path or not os.path.exists(tmp_path):
+            raise HTTPException(status_code=400, detail="Video file not found")
+        
+        # Open video and get frame
+        cap = cv2.VideoCapture(tmp_path)
+        if not cap.isOpened():
+            raise HTTPException(status_code=400, detail="Could not open video")
+        
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if frame_number >= total_frames:
+            frame_number = total_frames - 1
+        
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+        ret, frame = cap.read()
+        cap.release()
+        
+        if not ret:
+            raise HTTPException(status_code=400, detail="Could not read frame")
+        
+        # Process frame
+        result = process_frame_with_detection(frame, draw_overlay=True)
+        result["frame_number"] = frame_number
+        result["total_frames"] = total_frames
+        result["video_id"] = video_id
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Video frame processing error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/live/feed/{camera_id}")
+async def get_live_feed_status(camera_id: str):
+    """Get the latest detection results for a camera feed"""
+    if camera_id not in live_feeds:
+        return {"status": "inactive", "message": "No active feed for this camera"}
+    
+    return {
+        "status": "active",
+        **live_feeds[camera_id]
+    }
+
+@api_router.get("/live/demo-frame")
+async def get_demo_frame():
+    """Generate a demo frame with simulated detection for testing"""
+    # Create a demo frame
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    frame[:] = (40, 40, 40)  # Dark gray background
+    
+    # Add some rectangles to simulate a store
+    cv2.rectangle(frame, (50, 100), (200, 400), (60, 60, 60), -1)  # Shelf 1
+    cv2.rectangle(frame, (250, 100), (400, 400), (60, 60, 60), -1)  # Shelf 2
+    cv2.rectangle(frame, (450, 100), (600, 400), (60, 60, 60), -1)  # Shelf 3
+    
+    # Add text
+    cv2.putText(frame, "DEMO FEED - Connect camera for real detection", 
+                (50, 450), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (150, 150, 150), 1)
+    
+    # Encode frame
+    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    frame_base64 = base64.b64encode(buffer).decode('utf-8')
+    
+    return {
+        "frame_annotated": frame_base64,
+        "detections": [],
+        "scene_analysis": {
+            "total_persons": 0,
+            "suspicious_count": 0,
+            "scene_status": "normal",
+            "activities_summary": {}
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "is_demo": True
+    }
 
 # Include the router in the main app
 app.include_router(api_router)
