@@ -38,7 +38,11 @@ EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 # ============================================
 # YOLO model for person detection and tracking
 yolo_model = None
+yolo_pose_model = None
 deepface_initialized = False
+
+# Live feed state management
+live_feeds = {}  # Store active camera feeds
 
 def get_yolo_model():
     """Lazy load YOLO model"""
@@ -50,6 +54,17 @@ def get_yolo_model():
         except Exception as e:
             logger.error(f"Failed to load YOLO model: {e}")
     return yolo_model
+
+def get_yolo_pose_model():
+    """Lazy load YOLO pose model for skeleton detection"""
+    global yolo_pose_model
+    if yolo_pose_model is None:
+        try:
+            yolo_pose_model = YOLO('yolov8n-pose.pt')  # Pose estimation model
+            logger.info("YOLO Pose model loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load YOLO Pose model: {e}")
+    return yolo_pose_model
 
 def init_deepface():
     """Initialize DeepFace for face recognition"""
@@ -63,6 +78,135 @@ def init_deepface():
         except Exception as e:
             logger.error(f"Failed to initialize DeepFace: {e}")
     return deepface_initialized
+
+# ============================================
+# DECISION ENGINE
+# ============================================
+class DecisionEngine:
+    """AI Decision Engine for threat assessment"""
+    
+    ACTIVITY_THRESHOLDS = {
+        "item_in_pocket": 0.7,
+        "concealment": 0.6,
+        "loitering": 0.5,
+        "exit_movement": 0.6,
+        "staff_theft": 0.7
+    }
+    
+    THREAT_LEVELS = {
+        "critical": 0.8,
+        "warning": 0.5,
+        "safe": 0.0
+    }
+    
+    @staticmethod
+    def analyze_pose(keypoints: List, bbox: List) -> Dict:
+        """Analyze pose keypoints for suspicious behavior"""
+        activities = []
+        confidence_scores = {}
+        
+        if not keypoints or len(keypoints) < 17:
+            return {"activities": [], "scores": {}, "threat_level": "safe"}
+        
+        # Keypoint indices (COCO format):
+        # 0: nose, 5-6: shoulders, 7-8: elbows, 9-10: wrists
+        # 11-12: hips, 13-14: knees, 15-16: ankles
+        
+        try:
+            # Extract key body parts
+            left_wrist = keypoints[9] if len(keypoints) > 9 else None
+            right_wrist = keypoints[10] if len(keypoints) > 10 else None
+            left_hip = keypoints[11] if len(keypoints) > 11 else None
+            right_hip = keypoints[12] if len(keypoints) > 12 else None
+            left_shoulder = keypoints[5] if len(keypoints) > 5 else None
+            right_shoulder = keypoints[6] if len(keypoints) > 6 else None
+            
+            # Check for hands near pocket area (item in pocket detection)
+            if left_wrist and left_hip:
+                dist_left = abs(left_wrist[1] - left_hip[1])
+                if dist_left < 50:  # Close to hip
+                    activities.append("item_in_pocket")
+                    confidence_scores["item_in_pocket"] = min(0.85 + (50 - dist_left) / 100, 0.95)
+            
+            if right_wrist and right_hip:
+                dist_right = abs(right_wrist[1] - right_hip[1])
+                if dist_right < 50:
+                    if "item_in_pocket" not in activities:
+                        activities.append("item_in_pocket")
+                        confidence_scores["item_in_pocket"] = min(0.85 + (50 - dist_right) / 100, 0.95)
+                    else:
+                        confidence_scores["item_in_pocket"] = min(confidence_scores["item_in_pocket"] + 0.1, 0.98)
+            
+            # Check for concealment behavior (hands near torso)
+            if left_wrist and right_wrist and left_shoulder and right_shoulder:
+                torso_center_y = (left_shoulder[1] + right_shoulder[1]) / 2
+                if abs(left_wrist[1] - torso_center_y) < 80 or abs(right_wrist[1] - torso_center_y) < 80:
+                    activities.append("concealment_posture")
+                    confidence_scores["concealment_posture"] = 0.75
+            
+            # Determine standing vs walking based on leg positions
+            left_knee = keypoints[13] if len(keypoints) > 13 else None
+            right_knee = keypoints[14] if len(keypoints) > 14 else None
+            
+            if left_knee and right_knee:
+                knee_diff = abs(left_knee[0] - right_knee[0])
+                if knee_diff > 30:
+                    activities.append("walking")
+                    confidence_scores["walking"] = min(0.7 + knee_diff / 200, 0.95)
+                else:
+                    activities.append("standing")
+                    confidence_scores["standing"] = 0.8
+            
+        except Exception as e:
+            logger.error(f"Pose analysis error: {e}")
+        
+        # Calculate threat level
+        threat_score = 0.0
+        if "item_in_pocket" in activities:
+            threat_score += confidence_scores.get("item_in_pocket", 0) * 0.5
+        if "concealment_posture" in activities:
+            threat_score += confidence_scores.get("concealment_posture", 0) * 0.3
+        
+        threat_level = "safe"
+        if threat_score >= DecisionEngine.THREAT_LEVELS["critical"]:
+            threat_level = "critical"
+        elif threat_score >= DecisionEngine.THREAT_LEVELS["warning"]:
+            threat_level = "warning"
+        
+        return {
+            "activities": activities,
+            "scores": confidence_scores,
+            "threat_level": threat_level,
+            "threat_score": round(threat_score, 2)
+        }
+    
+    @staticmethod
+    def classify_overall_behavior(detections: List[Dict]) -> Dict:
+        """Classify overall scene behavior"""
+        total_persons = len(detections)
+        suspicious_count = 0
+        activities_summary = {}
+        
+        for det in detections:
+            if det.get("threat_level") in ["critical", "warning"]:
+                suspicious_count += 1
+            for activity in det.get("activities", []):
+                activities_summary[activity] = activities_summary.get(activity, 0) + 1
+        
+        scene_status = "normal"
+        if suspicious_count > 0:
+            scene_status = "alert"
+        if suspicious_count >= 2 or any(d.get("threat_level") == "critical" for d in detections):
+            scene_status = "critical"
+        
+        return {
+            "total_persons": total_persons,
+            "suspicious_count": suspicious_count,
+            "scene_status": scene_status,
+            "activities_summary": activities_summary
+        }
+
+decision_engine = DecisionEngine()
 
 # Create the main app without a prefix
 app = FastAPI()
