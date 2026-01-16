@@ -8,12 +8,15 @@ import {
   Activity,
   Clock,
   TrendingUp,
-  Users
+  Users,
+  Camera,
+  Play
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { motion } from "framer-motion";
+import { Link } from "react-router-dom";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
