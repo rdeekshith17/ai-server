@@ -1234,15 +1234,33 @@ async def get_ml_status():
 @api_router.get("/videos")
 async def get_videos():
     """Get all uploaded videos"""
-    videos = await db.videos.find({}, {"_id": 0, "temp_path": 0}).sort("uploaded_at", -1).to_list(100)
+    videos = await db.videos.find({}, {"_id": 0}).sort("uploaded_at", -1).to_list(100)
+    # Add availability flag for live detection
+    for video in videos:
+        video_path = video.get("video_path") or video.get("temp_path")
+        video["available_for_live"] = video_path and os.path.exists(video_path) if video_path else False
+        # Don't expose full paths to frontend
+        if "temp_path" in video:
+            del video["temp_path"]
+        if "video_path" in video:
+            video["has_video_file"] = True
+            del video["video_path"]
     return {"videos": videos}
 
 @api_router.get("/videos/{video_id}")
 async def get_video(video_id: str):
     """Get a specific video"""
-    video = await db.videos.find_one({"id": video_id}, {"_id": 0, "temp_path": 0})
+    video = await db.videos.find_one({"id": video_id}, {"_id": 0})
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
+    # Check availability
+    video_path = video.get("video_path") or video.get("temp_path")
+    video["available_for_live"] = video_path and os.path.exists(video_path) if video_path else False
+    if "temp_path" in video:
+        del video["temp_path"]
+    if "video_path" in video:
+        video["has_video_file"] = True
+        del video["video_path"]
     return video
 
 @api_router.delete("/videos/{video_id}")
@@ -1252,10 +1270,11 @@ async def delete_video(video_id: str):
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
     
-    # Delete temp file if exists
-    if video.get("temp_path") and os.path.exists(video["temp_path"]):
+    # Delete video file if exists
+    video_path = video.get("video_path") or video.get("temp_path")
+    if video_path and os.path.exists(video_path):
         try:
-            os.remove(video["temp_path"])
+            os.remove(video_path)
         except:
             pass
     
