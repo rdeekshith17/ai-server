@@ -6,11 +6,13 @@ import {
   BarChart3, 
   Shield,
   Cpu,
-  Users
+  Users,
+  Camera
 } from "lucide-react";
 
 const navItems = [
   { path: "/", icon: LayoutDashboard, label: "Dashboard" },
+  { path: "/live", icon: Camera, label: "Live Detection" },
   { path: "/upload", icon: Upload, label: "Upload Video" },
   { path: "/watchlist", icon: Users, label: "Watchlist" },
   { path: "/incidents", icon: AlertTriangle, label: "Incidents" },
