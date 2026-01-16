@@ -1203,6 +1203,11 @@ async def get_ml_status():
             "model": "YOLOv8n",
             "purpose": "Person detection and tracking"
         },
+        "yolo_pose": {
+            "loaded": yolo_pose_model is not None,
+            "model": "YOLOv8n-pose",
+            "purpose": "Pose estimation and activity detection"
+        },
         "deepface": {
             "initialized": deepface_initialized,
             "model": "VGG-Face",
@@ -1212,6 +1217,10 @@ async def get_ml_status():
             "available": EMERGENT_LLM_KEY is not None,
             "model": "GPT-5.2 Vision",
             "purpose": "Behavior analysis and scene understanding"
+        },
+        "decision_engine": {
+            "active": True,
+            "purpose": "Real-time threat assessment"
         }
     }
     
