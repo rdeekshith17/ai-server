@@ -1160,15 +1160,7 @@ async def analyze_video(video_id: str, max_frames: int = 8, use_ml: bool = True)
             }
         )
         
-        # Clean up temp file
-        try:
-            os.remove(tmp_path)
-            await db.videos.update_one(
-                {"id": video_id},
-                {"$unset": {"temp_path": ""}}
-            )
-        except:
-            pass
+        # Keep video file for live detection - don't delete!
         
         return {
             "video_id": video_id,
