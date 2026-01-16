@@ -177,15 +177,34 @@ export default function LiveFeed() {
                 
                 {/* Video Selector */}
                 <Select value={selectedVideo?.id || ""} onValueChange={handleVideoSelect}>
-                  <SelectTrigger className="w-[250px] bg-secondary border-white/10">
+                  <SelectTrigger className="w-[300px] bg-secondary border-white/10">
                     <SelectValue placeholder="Select a video..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {videos.map(video => (
-                      <SelectItem key={video.id} value={video.id}>
-                        {video.filename}
-                      </SelectItem>
-                    ))}
+                    {videos.length === 0 ? (
+                      <div className="p-4 text-center text-muted-foreground text-sm">
+                        No videos available. Upload a video first.
+                      </div>
+                    ) : (
+                      videos.map(video => (
+                        <SelectItem 
+                          key={video.id} 
+                          value={video.id}
+                          disabled={!video.available_for_live}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className={video.available_for_live ? '' : 'text-muted-foreground'}>
+                              {video.filename}
+                            </span>
+                            {video.available_for_live ? (
+                              <span className="text-[10px] text-emerald-400">● Ready</span>
+                            ) : (
+                              <span className="text-[10px] text-red-400">● Re-upload needed</span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
               </div>
