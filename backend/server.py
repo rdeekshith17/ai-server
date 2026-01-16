@@ -998,22 +998,27 @@ async def upload_video(
             "content_type": file.content_type
         }
         
-        # Save file temporarily
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp:
-            content = await file.read()
-            tmp.write(content)
-            tmp_path = tmp.name
+        # Create permanent storage directory
+        video_storage_dir = ROOT_DIR / "video_storage"
+        video_storage_dir.mkdir(exist_ok=True)
+        
+        # Save file permanently (not temp)
+        video_path = video_storage_dir / f"{video_id}.mp4"
+        content = await file.read()
+        with open(video_path, 'wb') as f:
+            f.write(content)
         
         # Extract video info
-        cap = cv2.VideoCapture(tmp_path)
+        cap = cv2.VideoCapture(str(video_path))
         if cap.isOpened():
             video_doc["total_frames"] = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             fps = cap.get(cv2.CAP_PROP_FPS)
             video_doc["duration_seconds"] = video_doc["total_frames"] / fps if fps > 0 else 0
         cap.release()
         
-        # Store temp path for later analysis
-        video_doc["temp_path"] = tmp_path
+        # Store permanent path for analysis and live detection
+        video_doc["video_path"] = str(video_path)
+        video_doc["temp_path"] = str(video_path)  # Keep for backward compatibility
         
         await db.videos.insert_one(video_doc)
         
