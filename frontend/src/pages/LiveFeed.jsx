@@ -88,11 +88,8 @@ export default function LiveFeed() {
   const fetchVideos = async () => {
     try {
       const response = await axios.get(`${API}/videos`);
-      // Show videos that have video_path or temp_path (available for live detection)
-      const availableVideos = (response.data.videos || []).filter(v => 
-        v.video_path || v.temp_path || v.status === "pending"
-      );
-      setVideos(availableVideos);
+      // Show all videos but mark which are available for live detection
+      setVideos(response.data.videos || []);
     } catch (err) {
       console.error("Failed to fetch videos:", err);
     }
