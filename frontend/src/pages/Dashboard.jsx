@@ -297,23 +297,81 @@ export default function Dashboard() {
       {/* Quick Actions */}
       <Card className="bg-card/50 border-white/5" data-testid="quick-actions">
         <CardContent className="p-6">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-4">
             <div>
               <h3 className="text-lg font-semibold" style={{ fontFamily: 'Rajdhani, sans-serif' }}>
                 QUICK ACTIONS
               </h3>
               <p className="text-sm text-muted-foreground">
-                Upload security footage for AI-powered shoplifting detection
+                Real-time detection or upload video for analysis
               </p>
             </div>
-            <a 
-              href="/upload" 
-              className="btn-primary flex items-center gap-2"
-              data-testid="upload-video-btn"
+            <div className="flex gap-3">
+              <Link 
+                to="/live" 
+                className="px-4 py-2 rounded-sm bg-cyan-500/20 border border-cyan-500/50 text-cyan-400 flex items-center gap-2 hover:bg-cyan-500/30 transition-colors"
+                data-testid="live-detection-btn"
+              >
+                <Camera className="w-4 h-4" />
+                Live Detection
+              </Link>
+              <Link 
+                to="/upload" 
+                className="btn-primary flex items-center gap-2"
+                data-testid="upload-video-btn"
+              >
+                <Video className="w-4 h-4" />
+                Upload Video
+              </Link>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Live Detection Preview */}
+      <Card className="bg-card/50 border-white/5 border-cyan-500/30" data-testid="live-preview">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-lg" style={{ fontFamily: 'Rajdhani, sans-serif' }}>
+            <Camera className="w-5 h-5 text-cyan-400" />
+            LIVE DETECTION
+            <Badge className="bg-cyan-500/20 text-cyan-400 border-cyan-500/30 text-[10px] ml-2">
+              NEW
+            </Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-6">
+            <div className="w-48 h-32 rounded-lg bg-black/50 flex items-center justify-center border border-white/10">
+              <div className="text-center">
+                <Camera className="w-8 h-8 text-cyan-400/50 mx-auto mb-2" />
+                <p className="text-xs text-muted-foreground">Real-time AI</p>
+              </div>
+            </div>
+            <div className="flex-1 space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-purple-400" />
+                <span className="text-sm">YOLO v8 Person Detection</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-pink-400" />
+                <span className="text-sm">Pose Estimation & Skeleton Tracking</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-amber-400" />
+                <span className="text-sm">Activity Detection (Walking, Item in Pocket)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-red-400" />
+                <span className="text-sm">Decision Engine Threat Assessment</span>
+              </div>
+            </div>
+            <Link 
+              to="/live"
+              className="flex flex-col items-center gap-2 p-4 rounded-lg bg-cyan-500/10 border border-cyan-500/30 hover:bg-cyan-500/20 transition-colors"
             >
-              <Video className="w-4 h-4" />
-              Upload Video
-            </a>
+              <Play className="w-8 h-8 text-cyan-400" />
+              <span className="text-sm text-cyan-400 font-medium">Start Live</span>
+            </Link>
           </div>
         </CardContent>
       </Card>
