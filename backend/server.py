@@ -281,26 +281,218 @@ class WatchlistPerson(BaseModel):
     notes: Optional[str] = None
     is_active: bool = True
 
+class CameraFeed(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    source: str  # RTSP URL, video file path, or "webcam"
+    location: str = "Main Floor"
+    store_type: str = "convenience"
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 # ============================================
-# LIVE CAMERA FEED SECTION - TO BE IMPLEMENTED
+# LIVE FEED PROCESSING FUNCTIONS
 # ============================================
-# TODO: Add live camera feed integration
-# 
-# To add RTSP camera support:
-# 1. Create a CameraFeed model with fields: id, name, rtsp_url, location, is_active
-# 2. Add endpoints: POST /api/cameras (add camera), GET /api/cameras (list), DELETE /api/cameras/{id}
-# 3. Create a background task that:
-#    - Connects to RTSP stream using cv2.VideoCapture(rtsp_url)
-#    - Extracts frames at intervals (e.g., every 2-5 seconds)
-#    - Runs analyze_frame_with_gpt() on each frame
-#    - Checks against watchlist
-#    - Creates incidents if suspicious activity detected
-# 4. Add WebSocket endpoint for real-time frame streaming to frontend
-#
-# Example RTSP URL formats:
-# - rtsp://username:password@ip_address:554/stream1
-# - rtsp://ip_address:554/live/ch00_0
-# ============================================
+
+def process_frame_with_detection(frame: np.ndarray, draw_overlay: bool = True) -> Dict[str, Any]:
+    """
+    Process a single frame with YOLO detection and pose estimation.
+    Returns detection results and optionally the annotated frame.
+    """
+    results = {
+        "detections": [],
+        "frame_annotated": None,
+        "scene_analysis": {},
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+    
+    try:
+        # Get YOLO models
+        detection_model = get_yolo_model()
+        pose_model = get_yolo_pose_model()
+        
+        annotated_frame = frame.copy() if draw_overlay else None
+        height, width = frame.shape[:2]
+        
+        # Run person detection
+        if detection_model:
+            det_results = detection_model(frame, verbose=False, classes=[0])  # class 0 = person
+            
+            for det_result in det_results:
+                boxes = det_result.boxes
+                for i, box in enumerate(boxes):
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+                    confidence = float(box.conf[0])
+                    
+                    if confidence < 0.5:
+                        continue
+                    
+                    detection = {
+                        "id": i,
+                        "bbox": [x1, y1, x2, y2],
+                        "confidence": round(confidence, 2),
+                        "activities": [],
+                        "activity_scores": {},
+                        "threat_level": "safe",
+                        "keypoints": []
+                    }
+                    
+                    # Determine position
+                    center_x = (x1 + x2) / 2
+                    if center_x < width * 0.25:
+                        detection["position"] = "left_edge"
+                    elif center_x > width * 0.75:
+                        detection["position"] = "right_edge"
+                    else:
+                        detection["position"] = "center"
+                    
+                    results["detections"].append(detection)
+        
+        # Run pose estimation
+        if pose_model and results["detections"]:
+            pose_results = pose_model(frame, verbose=False)
+            
+            for pose_result in pose_results:
+                if hasattr(pose_result, 'keypoints') and pose_result.keypoints is not None:
+                    keypoints_data = pose_result.keypoints.data
+                    
+                    for idx, kpts in enumerate(keypoints_data):
+                        if idx < len(results["detections"]):
+                            kpts_list = kpts.cpu().numpy().tolist()
+                            results["detections"][idx]["keypoints"] = kpts_list
+                            
+                            # Analyze pose with decision engine
+                            pose_analysis = decision_engine.analyze_pose(
+                                kpts_list, 
+                                results["detections"][idx]["bbox"]
+                            )
+                            results["detections"][idx].update({
+                                "activities": pose_analysis["activities"],
+                                "activity_scores": pose_analysis["scores"],
+                                "threat_level": pose_analysis["threat_level"],
+                                "threat_score": pose_analysis.get("threat_score", 0)
+                            })
+        
+        # Draw overlays if requested
+        if draw_overlay and annotated_frame is not None:
+            annotated_frame = draw_detection_overlay(annotated_frame, results["detections"])
+            
+            # Encode annotated frame
+            _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+            results["frame_annotated"] = base64.b64encode(buffer).decode('utf-8')
+        
+        # Scene-level analysis
+        results["scene_analysis"] = decision_engine.classify_overall_behavior(results["detections"])
+        
+    except Exception as e:
+        logger.error(f"Frame processing error: {e}")
+        results["error"] = str(e)
+    
+    return results
+
+def draw_detection_overlay(frame: np.ndarray, detections: List[Dict]) -> np.ndarray:
+    """Draw bounding boxes, pose skeleton, and activity labels on frame"""
+    
+    # Colors (BGR)
+    COLORS = {
+        "safe": (0, 255, 0),      # Green
+        "warning": (0, 165, 255),  # Orange
+        "critical": (0, 0, 255),   # Red
+        "skeleton": (255, 0, 255), # Magenta
+        "label_bg": (40, 40, 40)   # Dark gray
+    }
+    
+    SKELETON_CONNECTIONS = [
+        (0, 1), (0, 2), (1, 3), (2, 4),  # Head
+        (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),  # Arms
+        (5, 11), (6, 12), (11, 12),  # Torso
+        (11, 13), (13, 15), (12, 14), (14, 16)  # Legs
+    ]
+    
+    KEYPOINT_COLORS = [
+        (255, 0, 128),   # Nose - Pink
+        (255, 0, 128),   # Left Eye
+        (255, 0, 128),   # Right Eye
+        (255, 0, 128),   # Left Ear
+        (255, 0, 128),   # Right Ear
+        (255, 128, 0),   # Left Shoulder - Orange
+        (255, 128, 0),   # Right Shoulder
+        (0, 255, 128),   # Left Elbow - Green
+        (0, 255, 128),   # Right Elbow
+        (0, 255, 255),   # Left Wrist - Yellow
+        (0, 255, 255),   # Right Wrist
+        (255, 0, 0),     # Left Hip - Blue
+        (255, 0, 0),     # Right Hip
+        (128, 0, 255),   # Left Knee - Purple
+        (128, 0, 255),   # Right Knee
+        (255, 255, 0),   # Left Ankle - Cyan
+        (255, 255, 0)    # Right Ankle
+    ]
+    
+    for det in detections:
+        x1, y1, x2, y2 = det["bbox"]
+        threat_level = det.get("threat_level", "safe")
+        box_color = COLORS.get(threat_level, COLORS["safe"])
+        
+        # Draw bounding box
+        cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+        
+        # Draw pose skeleton
+        keypoints = det.get("keypoints", [])
+        if keypoints and len(keypoints) >= 17:
+            # Draw keypoints
+            for i, kpt in enumerate(keypoints[:17]):
+                if len(kpt) >= 2:
+                    px, py = int(kpt[0]), int(kpt[1])
+                    conf = kpt[2] if len(kpt) > 2 else 1.0
+                    if conf > 0.3 and px > 0 and py > 0:
+                        color = KEYPOINT_COLORS[i] if i < len(KEYPOINT_COLORS) else (255, 255, 255)
+                        cv2.circle(frame, (px, py), 4, color, -1)
+            
+            # Draw skeleton connections
+            for conn in SKELETON_CONNECTIONS:
+                if conn[0] < len(keypoints) and conn[1] < len(keypoints):
+                    pt1 = keypoints[conn[0]]
+                    pt2 = keypoints[conn[1]]
+                    if len(pt1) >= 2 and len(pt2) >= 2:
+                        x1_k, y1_k = int(pt1[0]), int(pt1[1])
+                        x2_k, y2_k = int(pt2[0]), int(pt2[1])
+                        conf1 = pt1[2] if len(pt1) > 2 else 1.0
+                        conf2 = pt2[2] if len(pt2) > 2 else 1.0
+                        if conf1 > 0.3 and conf2 > 0.3 and x1_k > 0 and y1_k > 0 and x2_k > 0 and y2_k > 0:
+                            cv2.line(frame, (x1_k, y1_k), (x2_k, y2_k), COLORS["skeleton"], 2)
+        
+        # Draw activity labels
+        label_y = y1 - 10
+        activities = det.get("activities", [])
+        scores = det.get("activity_scores", {})
+        
+        for activity in activities:
+            score = scores.get(activity, 0)
+            label = f"{activity.replace('_', ' ').title()}: {score*100:.1f}%"
+            
+            # Determine label color based on activity
+            if activity in ["item_in_pocket", "concealment_posture"]:
+                label_color = COLORS["critical"]
+            elif activity == "walking":
+                label_color = (255, 200, 0)  # Blue-ish
+            else:
+                label_color = COLORS["safe"]
+            
+            # Draw label background
+            (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.rectangle(frame, (x1, label_y - text_h - 5), (x1 + text_w + 10, label_y + 5), label_color, -1)
+            cv2.putText(frame, label, (x1 + 5, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            label_y -= (text_h + 12)
+        
+        # Draw threat indicator
+        if threat_level != "safe":
+            threat_label = f"THREAT: {threat_level.upper()}"
+            cv2.putText(frame, threat_label, (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
+    
+    # Draw scene status
+    return frame
 
 # ============================================
 # ML DETECTION FUNCTIONS
