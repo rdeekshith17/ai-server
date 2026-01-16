@@ -99,6 +99,7 @@ export default function LiveFeed() {
     if (!selectedVideo) return;
     
     setLoading(true);
+    setError(null);
     try {
       const response = await axios.post(
         `${API}/live/process-video-frame?video_id=${selectedVideo.id}&frame_number=${currentFrame}`
@@ -107,8 +108,10 @@ export default function LiveFeed() {
       setTotalFrames(response.data.total_frames || 0);
     } catch (err) {
       console.error("Frame processing error:", err);
-      if (err.response?.data?.detail?.includes("Video file not found")) {
-        toast.error("Video file not available. Please re-upload the video.");
+      const detail = err.response?.data?.detail || "Processing failed";
+      setError(detail);
+      if (detail.includes("Video file not found")) {
+        toast.error("Video file not available. Please upload the video again in Upload section.");
       }
     } finally {
       setLoading(false);
