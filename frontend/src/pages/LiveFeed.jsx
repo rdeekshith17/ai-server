@@ -43,6 +43,7 @@ export default function LiveFeed() {
   const [frameData, setFrameData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [autoProcess, setAutoProcess] = useState(true);
+  const [error, setError] = useState(null);
   const playIntervalRef = useRef(null);
 
   useEffect(() => {
