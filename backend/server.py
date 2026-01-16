@@ -1800,12 +1800,13 @@ async def process_video_frame(video_id: str, frame_number: int = 0):
         if not video:
             raise HTTPException(status_code=404, detail="Video not found")
         
-        tmp_path = video.get("temp_path")
-        if not tmp_path or not os.path.exists(tmp_path):
-            raise HTTPException(status_code=400, detail="Video file not found")
+        # Try video_path first, then temp_path for backward compatibility
+        video_path = video.get("video_path") or video.get("temp_path")
+        if not video_path or not os.path.exists(video_path):
+            raise HTTPException(status_code=400, detail="Video file not found. Please re-upload the video.")
         
         # Open video and get frame
-        cap = cv2.VideoCapture(tmp_path)
+        cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise HTTPException(status_code=400, detail="Could not open video")
         
