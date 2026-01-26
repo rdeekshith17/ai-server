@@ -13,7 +13,8 @@ import {
   LogOut,
   ChevronDown,
   Cpu,
-  BarChart3
+  BarChart3,
+  Bell
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import {
@@ -35,6 +36,7 @@ const adminNavItems = [
   { path: "/admin/cameras", icon: Camera, label: "Cameras" },
   { path: "/admin/incidents", icon: AlertTriangle, label: "Incidents" },
   { path: "/admin/ai-control", icon: Cpu, label: "AI Control" },
+  { path: "/admin/alerts", icon: Bell, label: "Alerts" },
   { path: "/admin/analytics", icon: BarChart3, label: "Analytics" },
 ];
 
