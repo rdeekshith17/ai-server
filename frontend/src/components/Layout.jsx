@@ -1,14 +1,27 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { 
   LayoutDashboard, 
   Upload, 
   AlertTriangle, 
   BarChart3, 
   Shield,
-  Cpu,
   Users,
-  Camera
+  Camera,
+  LogOut,
+  ChevronDown,
+  Settings,
+  UserCog
 } from "lucide-react";
+import { useAuth } from "../context/AuthContext";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
+import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 
 const navItems = [
   { path: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -20,6 +33,18 @@ const navItems = [
 ];
 
 export default function Layout() {
+  const { user, logout, isAdmin } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    await logout();
+  };
+
+  const getInitials = (name) => {
+    if (!name) return "U";
+    return name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2);
+  };
+
   return (
     <div className="flex h-screen" data-testid="app-layout">
       {/* Sidebar */}
@@ -35,7 +60,7 @@ export default function Layout() {
                 SECUREGUARD
               </h1>
               <p className="text-xs text-muted-foreground uppercase tracking-widest">
-                AI Detection
+                {user?.client_name || 'AI Detection'}
               </p>
             </div>
           </div>
@@ -59,6 +84,22 @@ export default function Layout() {
               </span>
             </NavLink>
           ))}
+          
+          {/* Admin Link - Only for super_admin */}
+          {isAdmin && (
+            <div className="pt-4 border-t border-white/5 mt-4">
+              <NavLink
+                to="/admin"
+                className="sidebar-link text-red-400"
+                data-testid="admin-console-link"
+              >
+                <UserCog className="w-5 h-5" />
+                <span style={{ fontFamily: 'Rajdhani, sans-serif', fontWeight: 500 }}>
+                  Admin Console
+                </span>
+              </NavLink>
+            </div>
+          )}
         </nav>
 
         {/* ML Models Status */}
@@ -83,9 +124,58 @@ export default function Layout() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto bg-background">
-        <Outlet />
-      </main>
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Top Bar */}
+        <header className="h-16 border-b border-white/5 flex items-center justify-end px-6 bg-card/30">
+          <DropdownMenu>
+            <DropdownMenuTrigger className="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors">
+              <Avatar className="h-8 w-8">
+                <AvatarImage src={user?.picture} alt={user?.name} />
+                <AvatarFallback className="bg-blue-600/20 text-blue-400 text-sm">
+                  {getInitials(user?.name)}
+                </AvatarFallback>
+              </Avatar>
+              <div className="text-left hidden sm:block">
+                <p className="text-sm font-medium">{user?.name}</p>
+                <p className="text-xs text-muted-foreground capitalize">{user?.role?.replace('_', ' ')}</p>
+              </div>
+              <ChevronDown className="w-4 h-4 text-muted-foreground" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel>
+                <div>
+                  <p>{user?.name}</p>
+                  <p className="text-xs font-normal text-muted-foreground">{user?.email}</p>
+                </div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {isAdmin && (
+                <>
+                  <DropdownMenuItem onClick={() => navigate("/admin")}>
+                    <UserCog className="mr-2 h-4 w-4" />
+                    Admin Console
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              <DropdownMenuItem onClick={() => navigate("/settings")}>
+                <Settings className="mr-2 h-4 w-4" />
+                Settings
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleLogout} className="text-red-400">
+                <LogOut className="mr-2 h-4 w-4" />
+                Logout
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </header>
+
+        {/* Page Content */}
+        <main className="flex-1 overflow-auto bg-background">
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 }
