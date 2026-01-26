@@ -287,7 +287,8 @@ def create_admin_routes(db: AsyncIOMotorDatabase) -> APIRouter:
         await db.clients.insert_one(new_client)
         
         # Remove MongoDB _id before returning
-        del new_client["_id"] if "_id" in new_client else None
+        if "_id" in new_client:
+            del new_client["_id"]
         
         return {"success": True, "client": new_client}
     
