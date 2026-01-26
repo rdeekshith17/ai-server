@@ -1904,6 +1904,12 @@ async def get_demo_frame():
 # Include the router in the main app
 app.include_router(api_router)
 
+# Include auth and admin routes with database dependency
+auth_router = create_auth_routes(db)
+admin_router = create_admin_routes(db)
+app.include_router(auth_router, prefix="/api")
+app.include_router(admin_router, prefix="/api")
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
