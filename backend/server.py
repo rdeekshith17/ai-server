@@ -1921,3 +1921,25 @@ app.add_middleware(
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+# ML Status endpoint
+@api_router.get("/ml/status")
+async def get_ml_status():
+    """Get status of all ML models"""
+    return {
+        "yolo": {
+            "loaded": yolo_model is not None,
+            "model": "yolov8n.pt" if yolo_model else None
+        },
+        "yolo_pose": {
+            "loaded": yolo_pose_model is not None,
+            "model": "yolov8n-pose.pt" if yolo_pose_model else None
+        },
+        "deepface": {
+            "initialized": deepface_initialized
+        },
+        "gpt_vision": {
+            "available": True,
+            "model": "gpt-5.2-vision"
+        }
+    }
