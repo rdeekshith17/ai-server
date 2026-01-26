@@ -554,6 +554,44 @@ def create_admin_routes(db: AsyncIOMotorDatabase) -> APIRouter:
         
         return {"success": True, "camera_id": camera_id}
     
+    @admin_router.put("/cameras/{camera_id}")
+    async def update_camera(request: Request, camera_id: str):
+        """Update a camera"""
+        user = await require_admin(request, db)
+        
+        camera = await db.cameras.find_one({"camera_id": camera_id})
+        if not camera:
+            raise HTTPException(status_code=404, detail="Camera not found")
+        
+        body = await request.json()
+        update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+        
+        if "name" in body:
+            update_dict["name"] = body["name"]
+        if "location" in body:
+            update_dict["location"] = body["location"]
+        if "rtsp_url" in body:
+            update_dict["rtsp_url"] = body["rtsp_url"]
+        if "status" in body:
+            update_dict["status"] = body["status"]
+        if "detection_settings" in body:
+            update_dict["detection_settings"] = body["detection_settings"]
+        
+        await db.cameras.update_one({"camera_id": camera_id}, {"$set": update_dict})
+        
+        return {"success": True, "message": "Camera updated"}
+    
+    @admin_router.delete("/cameras/{camera_id}")
+    async def delete_camera(request: Request, camera_id: str):
+        """Delete a camera"""
+        user = await require_admin(request, db)
+        
+        result = await db.cameras.delete_one({"camera_id": camera_id})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Camera not found")
+        
+        return {"success": True, "message": "Camera deleted"}
+    
     # ===========================================
     # AI MODEL CONTROL
     # ===========================================
