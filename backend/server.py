@@ -18,7 +18,7 @@ import numpy as np
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 
 # Import auth and admin routes
-from routes import create_auth_routes, create_admin_routes, get_current_user, require_auth, UserRole
+from routes import create_auth_routes, create_admin_routes, create_alerts_routes, get_current_user, require_auth, UserRole
 
 # ML Model imports
 from ultralytics import YOLO
