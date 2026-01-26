@@ -15,6 +15,7 @@ import AdminClients from "./pages/admin/AdminClients";
 import AdminCameras from "./pages/admin/AdminCameras";
 import AdminUsers from "./pages/admin/AdminUsers";
 import AdminAIControl from "./pages/admin/AdminAIControl";
+import AdminAlerts from "./pages/admin/AdminAlerts";
 import { Toaster } from "./components/ui/sonner";
 import { AuthProvider, ProtectedRoute } from "./context/AuthContext";
 
@@ -66,6 +67,7 @@ function AppRouter() {
         <Route path="cameras" element={<AdminCameras />} />
         <Route path="incidents" element={<Incidents />} />
         <Route path="ai-control" element={<AdminAIControl />} />
+        <Route path="alerts" element={<AdminAlerts />} />
         <Route path="analytics" element={<Analytics />} />
       </Route>
     </Routes>
