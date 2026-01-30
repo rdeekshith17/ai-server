@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:6
+    container_name: secureguard-mongodb
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "27017:27017"
+    networks:
+      - secureguard-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: secureguard-backend
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - MONGO_URL=mongodb://mongodb:27017
+      - DB_NAME=secureguard
+      - EMERGENT_API_KEY=${EMERGENT_API_KEY}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
+      - CORS_ORIGINS=http://localhost:3000,http://localhost
+    depends_on:
+      - mongodb
+    volumes:
+      - video-storage:/app/video_storage
+    networks:
+      - secureguard-network
+    # For RTSP access to host network cameras
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: secureguard-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - secureguard-network
+
+volumes:
+  mongo-data:
+  video-storage:
+
+networks:
+  secureguard-network:
+    driver: bridge
