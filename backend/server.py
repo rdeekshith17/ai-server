@@ -1749,6 +1749,102 @@ async def delete_camera(camera_id: str):
     
     return {"message": "Camera deleted"}
 
+@api_router.post("/cameras/{camera_id}/test-rtsp")
+async def test_rtsp_connection(camera_id: str):
+    """Test RTSP connection and capture a frame"""
+    import subprocess
+    
+    # Get camera from admin cameras collection
+    camera = await db.cameras.find_one({"camera_id": camera_id}, {"_id": 0})
+    if not camera:
+        # Try old camera collection
+        camera = await db.cameras.find_one({"id": camera_id}, {"_id": 0})
+    
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    
+    rtsp_url = camera.get("rtsp_url") or camera.get("source")
+    if not rtsp_url:
+        return {"success": False, "error": "No RTSP URL configured for this camera"}
+    
+    try:
+        # Use ffmpeg to capture a single frame
+        output_path = f"/tmp/rtsp_test_{camera_id}.jpg"
+        cmd = [
+            "ffmpeg", "-y",
+            "-rtsp_transport", "tcp",
+            "-i", rtsp_url,
+            "-frames:v", "1",
+            "-q:v", "2",
+            output_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        
+        if result.returncode == 0 and os.path.exists(output_path):
+            # Read and encode the frame
+            with open(output_path, "rb") as f:
+                frame_data = base64.b64encode(f.read()).decode('utf-8')
+            
+            # Clean up
+            os.remove(output_path)
+            
+            # Update camera status
+            await db.cameras.update_one(
+                {"camera_id": camera_id},
+                {"$set": {"status": "online", "last_test_at": datetime.now(timezone.utc).isoformat()}}
+            )
+            
+            return {
+                "success": True,
+                "message": "RTSP connection successful",
+                "frame": f"data:image/jpeg;base64,{frame_data}",
+                "camera_name": camera.get("name")
+            }
+        else:
+            error_msg = result.stderr[:500] if result.stderr else "Unknown error"
+            return {
+                "success": False,
+                "error": f"Failed to connect: {error_msg}",
+                "hint": "Check if the camera is accessible from this network"
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "success": False,
+            "error": "Connection timeout - camera not reachable",
+            "hint": "The IP address may not be accessible from this server (local network IPs require local deployment)"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@api_router.post("/cameras/{camera_id}/start-stream")
+async def start_rtsp_stream(camera_id: str):
+    """Start processing RTSP stream for a camera"""
+    camera = await db.cameras.find_one({"camera_id": camera_id}, {"_id": 0})
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    
+    rtsp_url = camera.get("rtsp_url")
+    if not rtsp_url:
+        return {"success": False, "error": "No RTSP URL configured"}
+    
+    # Mark camera as streaming
+    await db.cameras.update_one(
+        {"camera_id": camera_id},
+        {"$set": {"status": "streaming", "stream_started_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    return {
+        "success": True,
+        "message": "Stream started",
+        "camera_id": camera_id,
+        "websocket_url": f"/ws/camera/{camera_id}"
+    }
+
 @api_router.post("/live/process-frame")
 async def process_live_frame(
     frame: UploadFile = File(...),
