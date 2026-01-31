@@ -1,0 +1,27 @@
+# Edge Device - Full ML Stack
+fastapi==0.109.0
+uvicorn==0.27.0
+python-dotenv==1.0.0
+pydantic==2.5.3
+httpx==0.26.0
+aiofiles==23.2.1
+aiohttp==3.9.1
+
+# ML Models
+ultralytics==8.0.200
+opencv-python-headless==4.8.1.78
+numpy==1.26.2
+Pillow==10.1.0
+
+# Face Recognition
+deepface==0.0.79
+tf-keras==2.15.0
+
+# Video Processing
+ffmpeg-python==0.2.0
+
+# Local Database (cache)
+tinydb==4.8.0
+
+# Scheduling
+schedule==1.2.1
