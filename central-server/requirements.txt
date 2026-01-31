@@ -1,0 +1,25 @@
+# Central Server - Lightweight (No ML)
+fastapi==0.109.0
+uvicorn==0.27.0
+motor==3.3.2
+python-dotenv==1.0.0
+pydantic==2.5.3
+httpx==0.26.0
+python-multipart==0.0.6
+aiofiles==23.2.1
+
+# Authentication
+PyJWT==2.8.0
+
+# Alerts
+twilio==8.10.0
+
+# Billing (optional)
+stripe==7.8.0
+
+# NO ML DEPENDENCIES - These run on Edge Devices only:
+# - tensorflow
+# - torch
+# - ultralytics
+# - deepface
+# - opencv-python
