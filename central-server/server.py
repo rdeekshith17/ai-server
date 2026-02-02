@@ -500,23 +500,3 @@ async def health_check():
         "service": "central-server",
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
-
-
-@app.on_event("startup")
-async def startup():
-    logger.info("SecureGuard Central Server starting...")
-    logger.info(f"MongoDB: {MONGO_URL}")
-    
-    # Create indexes
-    await db.clients.create_index("client_id", unique=True)
-    await db.edge_devices.create_index("device_id", unique=True)
-    await db.edge_devices.create_index("client_id")
-    await db.incidents.create_index([("client_id", 1), ("timestamp", -1)])
-    
-    logger.info("Central Server ready!")
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    client.close()
-    logger.info("Central Server shutdown")
