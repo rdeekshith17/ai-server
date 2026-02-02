@@ -1,184 +1,369 @@
 <analysis>**original_problem_statement:**
-The initial request was to build a shoplifting detection system for various retail stores. Over the course of development, the requirements evolved significantly. The final set of implemented features includes:
-- A full-stack application with a React frontend and FastAPI backend.
-- Video upload functionality for analysis.
-- A multi-layered AI/ML detection pipeline using:
-    - **YOLOv8** for real-time person detection.
-    - **DeepFace** for face recognition against a user-managed watchlist.
-    - **YOLO Pose** for pose estimation to identify suspicious postures (e.g., concealment).
-    - **OpenAI GPT-5.2 Vision** for detailed contextual analysis of behaviors, suspect descriptions, and items involved.
-- A Live Detection feature that simulates real-time monitoring by processing uploaded videos frame-by-frame and displaying detections with visual overlays (bounding boxes, pose skeletons).
-- A decision engine that assesses a threat level (Safe, Warning, Critical) based on the combined output of the ML models.
-- An incident reporting system that logs detected events with details, confidence scores, and a snapshot image from the video.
-- A dashboard for at-a-glance statistics, and pages for managing a watchlist, viewing incident history, and running the live detection.
+The initial request was to build a shoplifting detection system. This evolved into a full-stack application with a multi-model AI pipeline (YOLOv8, DeepFace, Pose Estimation, GPT-5.2). The user then requested a pivot to a scalable, multi-tenant SaaS platform.
 
-The most recent user request is to transform the application into a scalable, multi-tenant SaaS platform to support multiple clients (stores) with data isolation, multiple camera streams, and separate admin/client dashboards.
+Most recently, the user's requirements have led to a further architectural evolution: a distributed system with a **Central Cloud Server** for management and a separate **Edge Device Processor** to be installed at each client's location. This new architecture is designed to handle multi-location deployments (e.g., clients in different states) by processing RTSP video streams locally on the edge device and sending only the results (incidents, metadata) to the central server.
+
+**PRODUCT REQUIREMENTS (latest):**
+*   **Architecture:** A central cloud server and multiple on-premise edge devices.
+*   **Central Server:** Handles all client management, user accounts, dashboards, billing, and incident reporting. It does NOT process raw video.
+*   **Edge Device:** Deployed at the client's site. It connects to local RTSP cameras, runs the entire AI/ML detection pipeline, and sends structured alert/incident data to the Central Server.
+*   **Auto-Provisioning:** A mechanism to easily set up and register new edge devices with the central server.
+*   **RBAC (Role-Based Access Control):**
+    *   **Admin:** Full system access.
+    *   **Client Owner:** Manages their own cameras, users, and alert settings.
+    *   **Client Staff:** Views live feed and acknowledges alerts.
+*   **Core Functionality:**
+    *   **Client Management:** Admins can create, update, and manage client accounts.
+    *   **Camera & Stream Management:** Clients can add/manage their local RTSP streams.
+    *   **AI Model Control:** Clients can configure AI detection sensitivity.
+    *   **Alerts & Incidents:** The system must log incidents and provide real-time alerts (including WhatsApp integration).
+    *   **System Health & Monitoring:** Dashboards for both admins and clients.
 
 **User's preferred language**: English
 
 **what currently exists?**
-A functional single-user shoplifting detection application. The backend (FastAPI) handles video uploads, runs a complex multi-model analysis (YOLO, DeepFace, Pose Estimation, GPT-5.2), and serves data for incidents, analytics, and a simulated live feed. The frontend (React) provides a user interface for all features, including a dashboard, incident reports with images, watchlist management, and a live detection view with real-time visual overlays. The initial files and architecture design document for the multi-tenant migration have been created.
+The project has just undergone a major architectural refactoring. The previous monolithic structure (, ) has been deprecated in favor of a distributed model. The agent created the initial directory structure and boilerplate code for this new architecture:
+-   : Contains a FastAPI  for the main API and frontend hosting, along with .
+-   : Contains a Python script  for local ML processing, along with its own .
+-   : Contains several new markdown files explaining the new architecture and deployment strategy.
+
+However, both new components have unresolved dependency conflicts that prevent them from being installed and run. The application is currently in a non-functional, transitional state.
 
 **Last working item**:
-- **Last item agent was working:** The agent began the transition to a multi-tenant SaaS architecture as requested by the user. It created a high-level design document and the initial Python files for the backend to support multiple clients, including database models for  and .
-- **Status:** IN PROGRESS
-- **Agent Testing Done:** N
-- **Which testing method agent to use?** both
-- **User Testing Done:** N
+-   **Last item agent was working:** Refactoring the application into a distributed system with a **Central Server** (for cloud management) and an **Edge Device** (for on-site ML processing). The agent created the new directory structures (, ) and the initial Python files and dependency lists for each component.
+-   **Status:** IN PROGRESS
+-   **Agent Testing Done:** N
+-   **Which testing method agent to use?** both
+-   **User Testing Done:** N
 
 **All Pending/In progress Issue list**:
-There are no outstanding bugs or issues. The current focus is entirely on new feature development.
+-   **Issue 1: Central Server Dependency Conflict** (P0 - BLOCKER)
+-   **Issue 2: Edge Device Dependency Conflict** (P0 - BLOCKER)
+
+**Issues Detail:**
+-   **Issue 1: Central Server Dependency Conflict**
+    -   **Description:** When creating  and trying to install dependencies, a conflict was reported:  This prevents the central server environment from being set up.
+    -   **Attempted fixes:** None. The agent created the files but did not resolve the installation error.
+    -   **Next debug checklist:**
+        1.  Examine .
+        2.  Run Looking in indexes: https://pypi.org/simple, https://d33sy5i8bnduwe.cloudfront.net/simple/
+Requirement already satisfied: fastapi==0.109.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/central-server/requirements.txt (line 2)) (0.109.0)
+Requirement already satisfied: uvicorn==0.27.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/central-server/requirements.txt (line 3)) (0.27.0)
+Requirement already satisfied: motor==3.3.2 in /root/.venv/lib/python3.11/site-packages (from -r /app/central-server/requirements.txt (line 4)) (3.3.2)
+Requirement already satisfied: python-dotenv==1.0.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/central-server/requirements.txt (line 5)) (1.0.0)
+Requirement already satisfied: pydantic==2.5.3 in /root/.venv/lib/python3.11/site-packages (from -r /app/central-server/requirements.txt (line 6)) (2.5.3)
+Requirement already satisfied: httpx==0.26.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/central-server/requirements.txt (line 7)) (0.26.0)
+Requirement already satisfied: python-multipart==0.0.6 in /root/.venv/lib/python3.11/site-packages (from -r /app/central-server/requirements.txt (line 8)) (0.0.6)
+Requirement already satisfied: aiofiles==23.2.1 in /root/.venv/lib/python3.11/site-packages (from -r /app/central-server/requirements.txt (line 9)) (23.2.1)
+Requirement already satisfied: PyJWT==2.8.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/central-server/requirements.txt (line 12)) (2.8.0)
+Requirement already satisfied: twilio==8.10.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/central-server/requirements.txt (line 15)) (8.10.0)
+Requirement already satisfied: stripe==7.8.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/central-server/requirements.txt (line 18)) (7.8.0)
+Requirement already satisfied: starlette<0.36.0,>=0.35.0 in /root/.venv/lib/python3.11/site-packages (from fastapi==0.109.0->-r /app/central-server/requirements.txt (line 2)) (0.35.1)
+Requirement already satisfied: typing-extensions>=4.8.0 in /root/.venv/lib/python3.11/site-packages (from fastapi==0.109.0->-r /app/central-server/requirements.txt (line 2)) (4.15.0)
+Requirement already satisfied: annotated-types>=0.4.0 in /root/.venv/lib/python3.11/site-packages (from pydantic==2.5.3->-r /app/central-server/requirements.txt (line 6)) (0.7.0)
+Requirement already satisfied: pydantic-core==2.14.6 in /root/.venv/lib/python3.11/site-packages (from pydantic==2.5.3->-r /app/central-server/requirements.txt (line 6)) (2.14.6)
+Requirement already satisfied: click>=7.0 in /root/.venv/lib/python3.11/site-packages (from uvicorn==0.27.0->-r /app/central-server/requirements.txt (line 3)) (8.3.1)
+Requirement already satisfied: h11>=0.8 in /root/.venv/lib/python3.11/site-packages (from uvicorn==0.27.0->-r /app/central-server/requirements.txt (line 3)) (0.16.0)
+Requirement already satisfied: pymongo<5,>=4.5 in /root/.venv/lib/python3.11/site-packages (from motor==3.3.2->-r /app/central-server/requirements.txt (line 4)) (4.5.0)
+Requirement already satisfied: anyio in /root/.venv/lib/python3.11/site-packages (from httpx==0.26.0->-r /app/central-server/requirements.txt (line 7)) (4.12.0)
+Requirement already satisfied: certifi in /root/.venv/lib/python3.11/site-packages (from httpx==0.26.0->-r /app/central-server/requirements.txt (line 7)) (2026.1.4)
+Requirement already satisfied: httpcore==1.* in /root/.venv/lib/python3.11/site-packages (from httpx==0.26.0->-r /app/central-server/requirements.txt (line 7)) (1.0.9)
+Requirement already satisfied: idna in /root/.venv/lib/python3.11/site-packages (from httpx==0.26.0->-r /app/central-server/requirements.txt (line 7)) (3.11)
+Requirement already satisfied: sniffio in /root/.venv/lib/python3.11/site-packages (from httpx==0.26.0->-r /app/central-server/requirements.txt (line 7)) (1.3.1)
+Requirement already satisfied: requests>=2.0.0 in /root/.venv/lib/python3.11/site-packages (from twilio==8.10.0->-r /app/central-server/requirements.txt (line 15)) (2.32.5)
+Requirement already satisfied: aiohttp>=3.8.4 in /root/.venv/lib/python3.11/site-packages (from twilio==8.10.0->-r /app/central-server/requirements.txt (line 15)) (3.9.1)
+Requirement already satisfied: aiohttp-retry>=2.8.3 in /root/.venv/lib/python3.11/site-packages (from twilio==8.10.0->-r /app/central-server/requirements.txt (line 15)) (2.9.1)
+Requirement already satisfied: dnspython<3.0.0,>=1.16.0 in /root/.venv/lib/python3.11/site-packages (from pymongo<5,>=4.5->motor==3.3.2->-r /app/central-server/requirements.txt (line 4)) (2.8.0)
+Requirement already satisfied: attrs>=17.3.0 in /root/.venv/lib/python3.11/site-packages (from aiohttp>=3.8.4->twilio==8.10.0->-r /app/central-server/requirements.txt (line 15)) (25.4.0)
+Requirement already satisfied: multidict<7.0,>=4.5 in /root/.venv/lib/python3.11/site-packages (from aiohttp>=3.8.4->twilio==8.10.0->-r /app/central-server/requirements.txt (line 15)) (6.7.0)
+Requirement already satisfied: yarl<2.0,>=1.0 in /root/.venv/lib/python3.11/site-packages (from aiohttp>=3.8.4->twilio==8.10.0->-r /app/central-server/requirements.txt (line 15)) (1.22.0)
+Requirement already satisfied: frozenlist>=1.1.1 in /root/.venv/lib/python3.11/site-packages (from aiohttp>=3.8.4->twilio==8.10.0->-r /app/central-server/requirements.txt (line 15)) (1.8.0)
+Requirement already satisfied: aiosignal>=1.1.2 in /root/.venv/lib/python3.11/site-packages (from aiohttp>=3.8.4->twilio==8.10.0->-r /app/central-server/requirements.txt (line 15)) (1.4.0)
+Requirement already satisfied: propcache>=0.2.1 in /root/.venv/lib/python3.11/site-packages (from yarl<2.0,>=1.0->aiohttp>=3.8.4->twilio==8.10.0->-r /app/central-server/requirements.txt (line 15)) (0.4.1)
+Requirement already satisfied: charset_normalizer<4,>=2 in /root/.venv/lib/python3.11/site-packages (from requests>=2.0.0->twilio==8.10.0->-r /app/central-server/requirements.txt (line 15)) (3.4.4)
+Requirement already satisfied: urllib3<3,>=1.21.1 in /root/.venv/lib/python3.11/site-packages (from requests>=2.0.0->twilio==8.10.0->-r /app/central-server/requirements.txt (line 15)) (2.6.2) to reproduce the error.
+        3.  Update the  package version in the requirements file to a version compatible with  (e.g., ).
+        4.  Re-run the installation to confirm the fix.
+    -   **Why fix this issue and what will be achieved with the fix?** The central server cannot run until its dependencies are correctly installed. Fixing this is the first step to making the new architecture functional.
+    -   **Status:** NOT STARTED
+    -   **Is recurring issue?** N
+    -   **Should Test frontend/backend/both after fix?** Backend
+    -   **Blocked on other issue:** No
+
+-   **Issue 2: Edge Device Dependency Conflict**
+    -   **Description:** When creating , a conflict was reported:  A similar conflict was also seen with . This prevents the edge device environment from being set up.
+    -   **Attempted fixes:** None.
+    -   **Next debug checklist:**
+        1.  Examine .
+        2.  Run Looking in indexes: https://pypi.org/simple, https://d33sy5i8bnduwe.cloudfront.net/simple/
+Requirement already satisfied: fastapi==0.109.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 2)) (0.109.0)
+Requirement already satisfied: uvicorn==0.27.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 3)) (0.27.0)
+Requirement already satisfied: python-dotenv==1.0.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 4)) (1.0.0)
+Requirement already satisfied: pydantic==2.5.3 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 5)) (2.5.3)
+Requirement already satisfied: httpx==0.26.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 6)) (0.26.0)
+Requirement already satisfied: aiofiles==23.2.1 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 7)) (23.2.1)
+Requirement already satisfied: aiohttp==3.9.1 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 8)) (3.9.1)
+Requirement already satisfied: ultralytics==8.0.200 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 11)) (8.0.200)
+Requirement already satisfied: opencv-python-headless==4.8.1.78 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 12)) (4.8.1.78)
+Requirement already satisfied: numpy==1.26.2 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 13)) (1.26.2)
+Requirement already satisfied: Pillow==10.1.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 14)) (10.1.0)
+Requirement already satisfied: deepface==0.0.79 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 17)) (0.0.79)
+Requirement already satisfied: tf-keras==2.15.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 18)) (2.15.0)
+Requirement already satisfied: ffmpeg-python==0.2.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 21)) (0.2.0)
+Requirement already satisfied: tinydb==4.8.0 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 24)) (4.8.0)
+Requirement already satisfied: schedule==1.2.1 in /root/.venv/lib/python3.11/site-packages (from -r /app/edge-device/requirements.txt (line 27)) (1.2.1)
+Requirement already satisfied: starlette<0.36.0,>=0.35.0 in /root/.venv/lib/python3.11/site-packages (from fastapi==0.109.0->-r /app/edge-device/requirements.txt (line 2)) (0.35.1)
+Requirement already satisfied: typing-extensions>=4.8.0 in /root/.venv/lib/python3.11/site-packages (from fastapi==0.109.0->-r /app/edge-device/requirements.txt (line 2)) (4.15.0)
+Requirement already satisfied: annotated-types>=0.4.0 in /root/.venv/lib/python3.11/site-packages (from pydantic==2.5.3->-r /app/edge-device/requirements.txt (line 5)) (0.7.0)
+Requirement already satisfied: pydantic-core==2.14.6 in /root/.venv/lib/python3.11/site-packages (from pydantic==2.5.3->-r /app/edge-device/requirements.txt (line 5)) (2.14.6)
+Requirement already satisfied: click>=7.0 in /root/.venv/lib/python3.11/site-packages (from uvicorn==0.27.0->-r /app/edge-device/requirements.txt (line 3)) (8.3.1)
+Requirement already satisfied: h11>=0.8 in /root/.venv/lib/python3.11/site-packages (from uvicorn==0.27.0->-r /app/edge-device/requirements.txt (line 3)) (0.16.0)
+Requirement already satisfied: anyio in /root/.venv/lib/python3.11/site-packages (from httpx==0.26.0->-r /app/edge-device/requirements.txt (line 6)) (4.12.0)
+Requirement already satisfied: certifi in /root/.venv/lib/python3.11/site-packages (from httpx==0.26.0->-r /app/edge-device/requirements.txt (line 6)) (2026.1.4)
+Requirement already satisfied: httpcore==1.* in /root/.venv/lib/python3.11/site-packages (from httpx==0.26.0->-r /app/edge-device/requirements.txt (line 6)) (1.0.9)
+Requirement already satisfied: idna in /root/.venv/lib/python3.11/site-packages (from httpx==0.26.0->-r /app/edge-device/requirements.txt (line 6)) (3.11)
+Requirement already satisfied: sniffio in /root/.venv/lib/python3.11/site-packages (from httpx==0.26.0->-r /app/edge-device/requirements.txt (line 6)) (1.3.1)
+Requirement already satisfied: attrs>=17.3.0 in /root/.venv/lib/python3.11/site-packages (from aiohttp==3.9.1->-r /app/edge-device/requirements.txt (line 8)) (25.4.0)
+Requirement already satisfied: multidict<7.0,>=4.5 in /root/.venv/lib/python3.11/site-packages (from aiohttp==3.9.1->-r /app/edge-device/requirements.txt (line 8)) (6.7.0)
+Requirement already satisfied: yarl<2.0,>=1.0 in /root/.venv/lib/python3.11/site-packages (from aiohttp==3.9.1->-r /app/edge-device/requirements.txt (line 8)) (1.22.0)
+Requirement already satisfied: frozenlist>=1.1.1 in /root/.venv/lib/python3.11/site-packages (from aiohttp==3.9.1->-r /app/edge-device/requirements.txt (line 8)) (1.8.0)
+Requirement already satisfied: aiosignal>=1.1.2 in /root/.venv/lib/python3.11/site-packages (from aiohttp==3.9.1->-r /app/edge-device/requirements.txt (line 8)) (1.4.0)
+Requirement already satisfied: matplotlib>=3.3.0 in /root/.venv/lib/python3.11/site-packages (from ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (3.10.8)
+Requirement already satisfied: opencv-python>=4.6.0 in /root/.venv/lib/python3.11/site-packages (from ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (4.11.0.86)
+Requirement already satisfied: pyyaml>=5.3.1 in /root/.venv/lib/python3.11/site-packages (from ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (6.0.3)
+Requirement already satisfied: requests>=2.23.0 in /root/.venv/lib/python3.11/site-packages (from ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (2.32.5)
+Requirement already satisfied: scipy>=1.4.1 in /root/.venv/lib/python3.11/site-packages (from ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (1.16.3)
+Requirement already satisfied: torch>=1.8.0 in /root/.venv/lib/python3.11/site-packages (from ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (2.9.1)
+Requirement already satisfied: torchvision>=0.9.0 in /root/.venv/lib/python3.11/site-packages (from ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (0.24.1)
+Requirement already satisfied: tqdm>=4.64.0 in /root/.venv/lib/python3.11/site-packages (from ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (4.67.1)
+Requirement already satisfied: pandas>=1.1.4 in /root/.venv/lib/python3.11/site-packages (from ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (2.3.3)
+Requirement already satisfied: seaborn>=0.11.0 in /root/.venv/lib/python3.11/site-packages (from ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (0.13.2)
+Requirement already satisfied: psutil in /root/.venv/lib/python3.11/site-packages (from ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (7.2.1)
+Requirement already satisfied: py-cpuinfo in /root/.venv/lib/python3.11/site-packages (from ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (9.0.0)
+Requirement already satisfied: thop>=0.1.1 in /root/.venv/lib/python3.11/site-packages (from ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (0.1.1.post2209072238)
+Requirement already satisfied: gdown>=3.10.1 in /root/.venv/lib/python3.11/site-packages (from deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (5.2.1)
+Requirement already satisfied: tensorflow>=1.9.0 in /root/.venv/lib/python3.11/site-packages (from deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (2.20.0)
+Requirement already satisfied: keras>=2.2.0 in /root/.venv/lib/python3.11/site-packages (from deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (3.13.0)
+Requirement already satisfied: Flask>=1.1.2 in /root/.venv/lib/python3.11/site-packages (from deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (3.1.2)
+Requirement already satisfied: mtcnn>=0.1.0 in /root/.venv/lib/python3.11/site-packages (from deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (1.0.0)
+Requirement already satisfied: retina-face>=0.0.1 in /root/.venv/lib/python3.11/site-packages (from deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (0.0.17)
+Requirement already satisfied: fire>=0.4.0 in /root/.venv/lib/python3.11/site-packages (from deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (0.7.1)
+Requirement already satisfied: gunicorn>=20.1.0 in /root/.venv/lib/python3.11/site-packages (from deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (23.0.0)
+Requirement already satisfied: future in /root/.venv/lib/python3.11/site-packages (from ffmpeg-python==0.2.0->-r /app/edge-device/requirements.txt (line 21)) (1.0.0)
+Requirement already satisfied: propcache>=0.2.1 in /root/.venv/lib/python3.11/site-packages (from yarl<2.0,>=1.0->aiohttp==3.9.1->-r /app/edge-device/requirements.txt (line 8)) (0.4.1)
+Requirement already satisfied: termcolor in /root/.venv/lib/python3.11/site-packages (from fire>=0.4.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (3.3.0)
+Requirement already satisfied: blinker>=1.9.0 in /root/.venv/lib/python3.11/site-packages (from Flask>=1.1.2->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (1.9.0)
+Requirement already satisfied: itsdangerous>=2.2.0 in /root/.venv/lib/python3.11/site-packages (from Flask>=1.1.2->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (2.2.0)
+Requirement already satisfied: jinja2>=3.1.2 in /root/.venv/lib/python3.11/site-packages (from Flask>=1.1.2->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (3.1.6)
+Requirement already satisfied: markupsafe>=2.1.1 in /root/.venv/lib/python3.11/site-packages (from Flask>=1.1.2->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (3.0.3)
+Requirement already satisfied: werkzeug>=3.1.0 in /root/.venv/lib/python3.11/site-packages (from Flask>=1.1.2->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (3.1.5)
+Requirement already satisfied: beautifulsoup4 in /root/.venv/lib/python3.11/site-packages (from gdown>=3.10.1->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (4.14.3)
+Requirement already satisfied: filelock in /root/.venv/lib/python3.11/site-packages (from gdown>=3.10.1->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (3.20.2)
+Requirement already satisfied: packaging in /root/.venv/lib/python3.11/site-packages (from gunicorn>=20.1.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (25.0)
+Requirement already satisfied: absl-py in /root/.venv/lib/python3.11/site-packages (from keras>=2.2.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (2.3.1)
+Requirement already satisfied: rich in /root/.venv/lib/python3.11/site-packages (from keras>=2.2.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (14.2.0)
+Requirement already satisfied: namex in /root/.venv/lib/python3.11/site-packages (from keras>=2.2.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (0.1.0)
+Requirement already satisfied: h5py in /root/.venv/lib/python3.11/site-packages (from keras>=2.2.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (3.15.1)
+Requirement already satisfied: optree in /root/.venv/lib/python3.11/site-packages (from keras>=2.2.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (0.18.0)
+Requirement already satisfied: ml-dtypes in /root/.venv/lib/python3.11/site-packages (from keras>=2.2.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (0.5.4)
+Requirement already satisfied: contourpy>=1.0.1 in /root/.venv/lib/python3.11/site-packages (from matplotlib>=3.3.0->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (1.3.3)
+Requirement already satisfied: cycler>=0.10 in /root/.venv/lib/python3.11/site-packages (from matplotlib>=3.3.0->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (0.12.1)
+Requirement already satisfied: fonttools>=4.22.0 in /root/.venv/lib/python3.11/site-packages (from matplotlib>=3.3.0->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (4.61.1)
+Requirement already satisfied: kiwisolver>=1.3.1 in /root/.venv/lib/python3.11/site-packages (from matplotlib>=3.3.0->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (1.4.9)
+Requirement already satisfied: pyparsing>=3 in /root/.venv/lib/python3.11/site-packages (from matplotlib>=3.3.0->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (3.3.1)
+Requirement already satisfied: python-dateutil>=2.7 in /root/.venv/lib/python3.11/site-packages (from matplotlib>=3.3.0->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (2.9.0.post0)
+Requirement already satisfied: joblib>=1.4.2 in /root/.venv/lib/python3.11/site-packages (from mtcnn>=0.1.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (1.5.3)
+Requirement already satisfied: lz4>=4.3.3 in /root/.venv/lib/python3.11/site-packages (from mtcnn>=0.1.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (4.4.5)
+Requirement already satisfied: pytz>=2020.1 in /root/.venv/lib/python3.11/site-packages (from pandas>=1.1.4->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (2025.2)
+Requirement already satisfied: tzdata>=2022.7 in /root/.venv/lib/python3.11/site-packages (from pandas>=1.1.4->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (2025.3)
+Requirement already satisfied: six>=1.5 in /root/.venv/lib/python3.11/site-packages (from python-dateutil>=2.7->matplotlib>=3.3.0->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (1.17.0)
+Requirement already satisfied: charset_normalizer<4,>=2 in /root/.venv/lib/python3.11/site-packages (from requests>=2.23.0->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (3.4.4)
+Requirement already satisfied: urllib3<3,>=1.21.1 in /root/.venv/lib/python3.11/site-packages (from requests>=2.23.0->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (2.6.2)
+Requirement already satisfied: astunparse>=1.6.0 in /root/.venv/lib/python3.11/site-packages (from tensorflow>=1.9.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (1.6.3)
+Requirement already satisfied: flatbuffers>=24.3.25 in /root/.venv/lib/python3.11/site-packages (from tensorflow>=1.9.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (25.12.19)
+Requirement already satisfied: gast!=0.5.0,!=0.5.1,!=0.5.2,>=0.2.1 in /root/.venv/lib/python3.11/site-packages (from tensorflow>=1.9.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (0.7.0)
+Requirement already satisfied: google_pasta>=0.1.1 in /root/.venv/lib/python3.11/site-packages (from tensorflow>=1.9.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (0.2.0)
+Requirement already satisfied: libclang>=13.0.0 in /root/.venv/lib/python3.11/site-packages (from tensorflow>=1.9.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (18.1.1)
+Requirement already satisfied: opt_einsum>=2.3.2 in /root/.venv/lib/python3.11/site-packages (from tensorflow>=1.9.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (3.4.0)
+Requirement already satisfied: protobuf>=5.28.0 in /root/.venv/lib/python3.11/site-packages (from tensorflow>=1.9.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (6.33.5)
+Requirement already satisfied: setuptools in /root/.venv/lib/python3.11/site-packages (from tensorflow>=1.9.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (80.9.0)
+Requirement already satisfied: wrapt>=1.11.0 in /root/.venv/lib/python3.11/site-packages (from tensorflow>=1.9.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (2.0.1)
+Requirement already satisfied: grpcio<2.0,>=1.24.3 in /root/.venv/lib/python3.11/site-packages (from tensorflow>=1.9.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (1.76.0)
+Requirement already satisfied: tensorboard~=2.20.0 in /root/.venv/lib/python3.11/site-packages (from tensorflow>=1.9.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (2.20.0)
+Requirement already satisfied: markdown>=2.6.8 in /root/.venv/lib/python3.11/site-packages (from tensorboard~=2.20.0->tensorflow>=1.9.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (3.10)
+Requirement already satisfied: tensorboard-data-server<0.8.0,>=0.7.0 in /root/.venv/lib/python3.11/site-packages (from tensorboard~=2.20.0->tensorflow>=1.9.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (0.7.2)
+Requirement already satisfied: wheel<1.0,>=0.23.0 in /root/.venv/lib/python3.11/site-packages (from astunparse>=1.6.0->tensorflow>=1.9.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (0.45.1)
+Requirement already satisfied: sympy>=1.13.3 in /root/.venv/lib/python3.11/site-packages (from torch>=1.8.0->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (1.14.0)
+Requirement already satisfied: networkx>=2.5.1 in /root/.venv/lib/python3.11/site-packages (from torch>=1.8.0->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (3.6.1)
+Requirement already satisfied: fsspec>=0.8.5 in /root/.venv/lib/python3.11/site-packages (from torch>=1.8.0->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (2025.12.0)
+Requirement already satisfied: mpmath<1.4,>=1.1.0 in /root/.venv/lib/python3.11/site-packages (from sympy>=1.13.3->torch>=1.8.0->ultralytics==8.0.200->-r /app/edge-device/requirements.txt (line 11)) (1.3.0)
+Requirement already satisfied: soupsieve>=1.6.1 in /root/.venv/lib/python3.11/site-packages (from beautifulsoup4->gdown>=3.10.1->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (2.8.1)
+Requirement already satisfied: PySocks!=1.5.7,>=1.5.6 in /root/.venv/lib/python3.11/site-packages (from requests[socks]->gdown>=3.10.1->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (1.7.1)
+Requirement already satisfied: markdown-it-py>=2.2.0 in /root/.venv/lib/python3.11/site-packages (from rich->keras>=2.2.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (4.0.0)
+Requirement already satisfied: pygments<3.0.0,>=2.13.0 in /root/.venv/lib/python3.11/site-packages (from rich->keras>=2.2.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (2.19.2)
+Requirement already satisfied: mdurl~=0.1 in /root/.venv/lib/python3.11/site-packages (from markdown-it-py>=2.2.0->rich->keras>=2.2.0->deepface==0.0.79->-r /app/edge-device/requirements.txt (line 17)) (0.1.2) to reproduce the error.
+        3.  Pin the  version in the requirements file to a compatible version (e.g., ).
+        4.  Re-run the installation to confirm the fix.
+    -   **Why fix this issue and what will be achieved with the fix?** The edge device software cannot run its ML models until dependencies are installed. Fixing this is critical for the ML processing pipeline.
+    -   **Status:** NOT STARTED
+    -   **Is recurring issue?** N
+    -   **Should Test frontend/backend/both after fix?** Backend
+    -   **Blocked on other issue:** No
 
 **In progress Task List**:
-- **Task 1: Implement Multi-Tenant SaaS Architecture**
-    - **Priority:** P0
-    - **Description:** Refactor the existing single-user application into a scalable, multi-tenant platform based on the user's requirements and the architecture defined in .
-    - **Where to resume:** The agent has already created , , and . The next immediate step is to build the authentication service and begin refactoring the  file to be tenant-aware by incorporating  and  into all data access logic and API endpoints.
-    - **What will be achieved with this?** A production-ready system capable of onboarding and managing multiple clients, ensuring their data (videos, incidents, watchlists) is completely isolated, and paving the way for client-specific dashboards and administration.
-    - **Status:** IN PROGRESS
-    - **Should Test frontend/backend/both after fix?** Both
-    - **Blocked on something:** No
+-   **Task 1: Complete Central Server / Edge Device Refactoring**
+    -   **Priority:** P0
+    -   **Description:** Fully separate the application logic from the old monolith into the new  and  components.
+    -   **Where to resume:** Start by fixing the dependency conflicts (Issues 1 & 2). Then, migrate the relevant code from  and the  directory into the  directory. Migrate the ML processing and video analysis logic into .
+    -   **What will be achieved with this?** A functional, distributed architecture that aligns with the user's multi-location deployment requirements.
+    -   **Status:** IN PROGRESS
+    -   **Should Test frontend/backend/both after fix?** Both
+    -   **Blocked on something:** The dependency conflicts (Issues 1 & 2).
 
 **Upcoming and Future Tasks**
 **Upcoming Tasks:**
-- **P0: Refactor Backend for Multi-Tenancy:** Integrate  and  models across all database queries and API endpoints in  to enforce data isolation. Implement JWT-based authentication for client users and an admin role.
-- **P0: Refactor Frontend for Multi-Tenancy:** Build login/logout flows. Create a new admin dashboard for client management. Modify all existing pages (, , , ) to be context-aware, fetching data only for the logged-in client.
-- **P1: Implement Real RTSP Stream Ingestion:** Replace the current video-file-based live feed simulation with a robust service that can ingest and process multiple real-time RTSP streams per client, likely using WebSockets to push detection data to the frontend.
+-   **P0: Implement Central-Edge Communication:** Design and implement a secure communication protocol (e.g., REST API with API keys, or WebSockets) for the Edge Device to send incident data to the Central Server.
+-   **P0: Finalize Edge Processor Logic:** Implement the full RTSP stream ingestion and ML analysis pipeline within .
+-   **P0: Implement Auto-Provisioning:** Create an endpoint on the central server and a script for the edge device to allow for secure, one-time registration of new edge devices.
+-   **P0: Refactor Frontend for New API:** Update all frontend components to fetch and send data to the new Central Server API endpoints.
+-   **P0: Code Cleanup:** Once the migration is complete and verified, remove the now-obsolete  and  directories.
 
 **Future Tasks:**
-- **P2: Add SMS/WhatsApp Notifications:** Integrate a service like Twilio to send real-time alerts for critical incidents, a feature the user deferred earlier.
-- **P2: Fine-Tune ML Models:** Introduce settings to allow clients to adjust detection thresholds to better suit their specific store environments and reduce false positives.
+-   **P1: Implement WhatsApp Alerts:** Complete the Twilio integration. This requires adding a UI for clients to enter their Twilio credentials and phone numbers, and triggering alerts from the central server when it receives a critical incident from an edge device.
+-   **P2: Fine-Tune ML Models:** Introduce settings in the client dashboard (served by the central server) that can be pushed down to the edge devices to adjust detection thresholds.
 
 **Completed work in this session**
-- **Shoplifting Detection MVP:** Built the core application for video upload, analysis, and reporting.
-- **Multi-Model ML Integration:** Successfully integrated YOLOv8, DeepFace, YOLO Pose, and GPT-5.2 Vision into a cohesive analysis pipeline.
-- **Enhanced Incident Details:** Upgraded the system to capture and display detailed incident reports, including frame images, suspect descriptions, and specific behaviors, driven by a more targeted GPT prompt.
-- **Live Detection Feature:** Implemented a simulated live-feed page with real-time detection overlays (bounding boxes, pose skeletons) and a decision engine for threat assessment.
-- **Video Persistence Fix:** Resolved an issue where live detection failed on older videos by modifying the system to store video files permanently instead of deleting them after analysis.
-- **Multi-Tenant Architecture Design:** Created the foundational design document () and initial backend files to begin the migration to a SaaS platform.
+-   **Multi-Tenant Foundation (Phase 1):** Implemented a complete multi-tenant auth system with Emergent Google OAuth, RBAC, an admin dashboard for client management (CRUD), and system health monitoring.
+-   **Admin Features (Phase 2):** Added UI and backend endpoints for managing cameras, users, and AI model settings on a per-client basis.
+-   **WhatsApp Integration Scaffolding:** Integrated the Twilio SDK and created the backend/frontend stubs for alert configuration.
+-   **Local Deployment Package:** Created a comprehensive set of files (, Dockerfiles, , documentation) to enable local deployment.
+-   **Architectural Pivot to Central/Edge:** After identifying that cloud deployment was unsuitable for the ML workload, designed and created the initial file structure for a distributed central server/edge device architecture based on user requirements.
 
 **Earlier issues found/mentioned but not fixed**
 None.
 
 **Known issue recurrence from previous fork**
-- **Issue recurrence in previous fork:** The agent previously encountered a memory limit that terminated the pod. It was reinitialized on a machine with more memory.
-- **Recurrence count:** 1
-- **Status:** RESOLVED
-- **Note:** The next agent must remain mindful of memory consumption, as the application loads multiple large ML models and processes video data, which are memory-intensive operations.
+-   **Issue recurrence in previous fork:** Pod termination due to high memory usage.
+-   **Recurrence count:** 1
+-   **Status:** RESOLVED (by architectural change)
+-   **Note:** The new central/edge architecture is a direct solution to this problem, as it moves the memory-intensive ML workload from the cloud server to on-premise edge devices. The central server should now have a much lower memory footprint.
 
 **Code Architecture**
 
 
 **Key Technical Concepts**
-- **Frontend:** React, Tailwind CSS, Axios, Recharts
-- **Backend:** FastAPI, Motor (async MongoDB driver)
-- **AI/ML:** OpenCV, Ultralytics (YOLOv8), DeepFace, YOLO Pose, OpenAI GPT-5.2 Vision
-- **Architecture:** Currently a monolithic full-stack application, in the process of being converted into a multi-tenant SaaS architecture.
+-   **Frontend:** React, Tailwind CSS
+-   **Backend:** FastAPI, Motor (MongoDB)
+-   **AI/ML:** YOLOv8, DeepFace, YOLO Pose, OpenAI GPT-5.2 Vision, TensorFlow, PyTorch
+-   **Architecture:** Distributed System (Central Cloud Server + On-premise Edge Devices)
+-   **Deployment:** Docker, Docker Compose
 
 **key DB schema**
-- : Stores metadata about uploaded videos, including uid=0(root) gid=0(root) groups=0(root), , , and .
-- : Contains detailed records of detected events, including , , , , and .
-- : Manages known individuals with fields like , , and pre-computed .
--  (New): Defines a tenant with fields like uid=0(root) gid=0(root) groups=0(root), , and .
--  (New): Represents a user associated with a client, with , , , and .
+(Managed by )
+-   : Tenant information (, , , , ).
+-   : User accounts with roles (, , , , ).
+-   : Camera configurations per client (, , , ).
+-   : Stores processed alerts received from edge devices (, , , , , ).
+-   , : (Potentially deprecated or functionality moved to edge devices).
 
 **changes in tech stack**
-- The following libraries were added to support the advanced ML pipeline: 
-    Arguments received: ['yolo']. Ultralytics 'yolo' commands use the following syntax:
-
-        yolo TASK MODE ARGS
-
-        Where   TASK (optional) is one of ['detect', 'pose', 'classify', 'obb', 'segment']
-                MODE (required) is one of ['val', 'predict', 'benchmark', 'export', 'track', 'train']
-                ARGS (optional) are any number of custom 'arg=value' pairs like 'imgsz=320' that override defaults.
-                    See all ARGS at https://docs.ultralytics.com/usage/cfg or with 'yolo cfg'
-
-    1. Train a detection model for 10 epochs with an initial learning_rate of 0.01
-        yolo train data=coco8.yaml model=yolo11n.pt epochs=10 lr0=0.01
-
-    2. Predict a YouTube video using a pretrained segmentation model at image size 320:
-        yolo predict model=yolo11n-seg.pt source='https://youtu.be/LNwODJXcvt4' imgsz=320
-
-    3. Validate a pretrained detection model at batch-size 1 and image size 640:
-        yolo val model=yolo11n.pt data=coco8.yaml batch=1 imgsz=640
-
-    4. Export a YOLO11n classification model to ONNX format at image size 224 by 128 (no TASK required)
-        yolo export model=yolo11n-cls.pt format=onnx imgsz=224,128
-
-    5. Ultralytics solutions usage
-        yolo solutions count or any of ['crop', 'blur', 'workout', 'heatmap', 'isegment', 'visioneye', 'speed', 'queue', 'analytics', 'inference', 'trackzone'] source="path/to/video.mp4"
-
-    6. Run special commands:
-        yolo help
-        yolo checks
-        yolo version
-        yolo settings
-        yolo copy-cfg
-        yolo cfg
-        yolo solutions help
-
-    Docs: https://docs.ultralytics.com
-    Solutions: https://docs.ultralytics.com/solutions/
-    Community: https://community.ultralytics.com
-    GitHub: https://github.com/ultralytics/ultralytics
-    , , .
+-   The application architecture has been completely changed from a monolith to a distributed system.
+-   Dependency conflicts were introduced in both  () and  () that need to be resolved.
 
 **All files of reference**
-- : **Crucial.** This document outlines the plan for the main ongoing task.
-- : The monolithic core of the backend. This file will be the primary subject of refactoring for the multi-tenant migration.
-- : Defines the new database schema for clients and users.
-- : The component for the live detection UI.
+-   : **Crucial.** Explains the new Central vs. Edge architecture.
+-   : The new entry point for the main application server.
+-   : The new entry point for the on-site ML processing application.
+-   : Contains a dependency conflict.
+-   : Contains a dependency conflict.
+-   : (Reference only) The old monolith containing all the logic that needs to be migrated.
 
 **Areas that need refactoring**:
-- ****: This file has become a large monolith containing all API routes, business logic, and ML processing code. It is critical to refactor it into a structured application with separate routers, services, and data access layers, as outlined in the new architecture, to support multi-tenancy and improve maintainability.
+-   The entire project is being refactored. The primary task is to migrate logic from  and  into the  and  directories, and then delete the old directories.
 
 **key api endpoints**
-- : Uploads a video file for analysis.
-- : Triggers the full ML pipeline on a specific video.
-- : Processes a single frame from a video to simulate live detection.
-- : Retrieves a list of all detected incidents.
-- : Adds a new person to the face recognition watchlist.
+- All API endpoints will be served from the . This includes auth, admin, client management, and a new endpoint for edge devices to report incidents. The  itself does not expose a public API but may have an internal one for communication.
 
 **Critical Info for New Agent**
-Your primary goal is to execute the migration to a multi-tenant SaaS architecture. The blueprint is in . This is a major refactoring effort. You must focus on modifying  to be tenant-aware by using  for all database operations to ensure strict data isolation. Subsequently, you will need to implement authentication and update the frontend to support a multi-client user experience. Be mindful of the application's high memory usage due to the ML models.
+Your top priority is to complete the architectural refactoring into a **Central Server** and **Edge Device**.
+
+1.  **Fix Dependencies First:** You are blocked by dependency installation errors in both  and . Resolve these  conflicts before writing any code.
+2.  **Migrate Logic:** Systematically move code from the old  into the new  (API, DB logic) and  (ML pipeline, video processing).
+3.  **Integrate Frontend:** Move the  source into the  and configure FastAPI to serve it.
+4.  **Build Communication:** Implement the API endpoint on the central server that will receive incident data from the edge devices.
+
+The user's goal is a system that can be deployed across multiple physical locations. The ML processing **must** happen on the edge.
 
 **documents and test reports created in this job**
-- 
-- 
-- 
-- 
+-   
+-   
+-   
+-   
+-   ==========================================
+  SecureGuard Local Deployment
+==========================================
+
+[1;33mWarning: Running as root. Consider using a non-root user.[0m
+Detected OS: linux
+
+Step 1: Checking prerequisites...
+  [0;32m✓[0m python3 found
+  [0;32m✓[0m pip3 found
+  [0;32m✓[0m node found
+  [0;32m✓[0m npm found
+  [0;31m✗[0m ffmpeg not found
+  [0;32m✓[0m mongod found
+
+[1;33mMissing dependencies:[0m ffmpeg
+
+Install with:
+  sudo apt update
+  sudo apt install -y python3 python3-pip python3-venv nodejs npm ffmpeg
+
+For MongoDB:
+  wget -qO - https://www.mongodb.org/static/pgp/server-7.0.asc | sudo apt-key add -
+  echo 'deb http://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse' | sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list
+  sudo apt update && sudo apt install -y mongodb-org
+  sudo systemctl start mongod
+-   
+-   
+-   
+-   
+-   
+-   
 
 **Last 10 User Messages and any pending HUMAN messages**
-1. **User (Latest):** Requested the design and implementation of a multi-tenant, production-ready SaaS architecture. (IN PROGRESS)
-2. **User:** Reported that live detection didn't work for existing videos. (RESOLVED)
-3. **User:** Requested a live feed feature with visual detection overlays and a decision engine, providing a reference image. (RESOLVED)
-4. **User:** Asked to enhance detection for specific theft behaviors and include images in incident reports. (RESOLVED)
-5. **User:** Requested the integration of YOLO and DeepFace alongside GPT-5.2 for a more robust detection system. (RESOLVED)
-6. **User:** Inquired about the AI/ML models being used in the application. (RESOLVED)
-7. **User:** i added the credits (Informational, likely regarding LLM key balance).
-8. **User:** Confirmed requirements: defer WhatsApp, proceed with watchlist and a live feed placeholder. (RESOLVED)
-9. **User:** Initially requested WhatsApp alerts, a live camera feed, and a watchlist feature. (PARTIALLY RESOLVED, WhatsApp deferred)
-10. **User:** Reported an issue where the model was not detecting theft. (RESOLVED)
+1.  **User:** Asked for clarification on the deployment model, questioning if the server is deployed at the client location.
+2.  **Agent:** Clarified the confusion with a new document () and proposed the Central Server / Edge Device split. (IN PROGRESS)
+3.  **User:** Asked where and how to deploy the server and client setup.
+4.  **Agent:** Provided a  document. (RESOLVED)
+5.  **User:** Called the deployer agent and asked for a health check.
+6.  **Agent:** Ran health check, found it's not suitable for Emergent Cloud due to ML dependencies, and fixed a  file issue. Recommended local deployment. (RESOLVED)
+7.  **User:** Requested to save the project to GitHub.
+8.  **Agent:** Provided instructions on how to use the Save to GitHub button. (RESOLVED)
+9.  **User:** Provided two local RTSP stream URLs and asked to test them.
+10. **Agent:** Added the cameras but confirmed the streams were inaccessible from the cloud server, explaining the need for local deployment. (RESOLVED)
 
 **Project Health Check:**
-- **Working:** The application is fully functional as a single-user system.
-- **Broken:** The current architecture does not support multiple clients; it is not multi-tenant.
-- **Mocked:** The Live Feed feature simulates real-time processing from static video files. It does not ingest live RTSP streams.
+-   **Broken:** The application is currently non-functional due to an in-progress architectural refactoring. The new  and  components have dependency conflicts and are not fully implemented.
+-   **Mocked:** The live feed processing is still simulated using video files. True RTSP ingestion is planned for the edge device.
 
 **3rd Party Integrations**
-- **OpenAI GPT-5.2 Vision:** Powers behavior analysis and description generation. Uses Emergent LLM Key.
-- **ultralytics (YOLOv8):** Used for person detection.
-- **deepface:** Used for face recognition against the watchlist.
-- **yolo_pose:** Used for pose estimation to detect suspicious gestures.
+-   **OpenAI GPT-5.2 Vision:** (For Edge Device) Behavior analysis. Uses Emergent LLM Key.
+-   **ultralytics (YOLOv8):** (For Edge Device) Person detection.
+-   **deepface:** (For Edge Device) Face recognition.
+-   **yolo_pose:** (For Edge Device) Pose estimation.
+-   **Twilio:** (For Central Server) WhatsApp notifications. Requires user credentials.
+-   **Emergent-managed Google Auth:** (For Central Server) User authentication.
 
 **Testing status**
-- **Testing agent used after significant changes:** YES
-- **Troubleshoot agent used after agent stuck in loop:** NO
-- **Test files created:** []
-- **Known regressions:** []
+-   **Testing agent used after significant changes:** NO (not since the architectural refactor started)
+-   **Troubleshoot agent used after agent stuck in loop:** NO
+-   **Test files created:** []
+-   **Known regressions:** The entire application is non-functional pending completion of the refactor.
 
 **Credentials to test flow:**
-The application does not currently have an authentication system. This will need to be implemented as part of the multi-tenant migration.
+Authentication is implemented via Emergent Google OAuth. Testing will require running the  and navigating to the login page.
 
 **What agent forgot to execute**
-The agent was in the initial phase of a major task—migrating to a multi-tenant architecture. It correctly laid the groundwork by creating the design documentation and initial model files. The work is not forgotten, but is the designated starting point for the next session.</analysis>
+The agent correctly identified the need for an architectural split but did not resolve the dependency conflicts that arose during the creation of the new  files. This is the immediate blocker for any further progress.</analysis>
