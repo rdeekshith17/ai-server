@@ -19,6 +19,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone, timedelta
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 import os
 import uuid
@@ -35,14 +36,43 @@ logger = logging.getLogger(__name__)
 # MongoDB
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "secureguard_central")
-client = AsyncIOMotorClient(MONGO_URL)
-db = client[DB_NAME]
+mongo_client: AsyncIOMotorClient = None
+db = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events"""
+    global mongo_client, db
+    
+    # Startup
+    logger.info("SecureGuard Central Server starting...")
+    logger.info(f"MongoDB: {MONGO_URL}")
+    
+    mongo_client = AsyncIOMotorClient(MONGO_URL)
+    db = mongo_client[DB_NAME]
+    
+    # Create indexes
+    await db.clients.create_index("client_id", unique=True)
+    await db.edge_devices.create_index("device_id", unique=True)
+    await db.edge_devices.create_index("client_id")
+    await db.incidents.create_index([("client_id", 1), ("timestamp", -1)])
+    
+    logger.info("Central Server ready!")
+    
+    yield  # Server runs here
+    
+    # Shutdown
+    mongo_client.close()
+    logger.info("Central Server shutdown")
+
 
 # App
 app = FastAPI(
     title="SecureGuard Central Server",
     description="Multi-tenant SaaS API for shoplifting detection",
-    version="2.0.0"
+    version="2.0.0",
+    lifespan=lifespan
 )
 
 api_router = APIRouter(prefix="/api")
