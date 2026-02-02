@@ -68,6 +68,7 @@ DB_NAME=secureguard_central
 
 # Authentication
 EMERGENT_API_KEY=your_key_here
+API_KEY=3ca173b8c6d5b24d4317b226435ed37dd80791156f380bb4523d3b29114cf903
 
 # Alerts (optional)
 TWILIO_ACCOUNT_SID=ACxxxxx
@@ -80,7 +81,9 @@ STRIPE_WEBHOOK_SECRET=whsec_xxxxx
 
 # Security
 JWT_SECRET=your-random-secret-key
+JWT_SECRET=9807c42391e28bc77702f3bf9b0262d9e9cf0cedd55bc83b85083f6dc8bf39846acecdc2102a131345c289535da44d9de3e98eea1e4d56090dd2e03adbc942e3
 API_KEY_SALT=your-random-salt
+API_KEY_SALT=80e20a23e11d9c76f0ab2306f1b42499b9ec0ea20589f5d4a488e5f239b95d11
 
 # CORS (add your domain)
 CORS_ORIGINS=https://yourdomain.com,http://localhost:3000
