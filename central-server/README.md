@@ -1,154 +1,147 @@
-# Central Server for SecureGuard SaaS
-## Lightweight Dashboard & API (No ML Models)
+# SecureGuard Central Server
 
----
+Lightweight API server for the SecureGuard multi-tenant SaaS platform. This server handles all management, authentication, and data storage while ML processing runs on Edge Devices at client locations.
 
-# OVERVIEW
+## Features
 
-This is the **CENTRAL SERVER** component that YOU deploy once.
-- Runs in Columbus, Ohio (or any VPS)
-- Handles: Dashboard, Auth, Database, Alerts, Billing
-- Does NOT run: YOLO, DeepFace, or any ML models
-- Receives incidents from Edge Devices at client locations
+- **Authentication**: Emergent Google OAuth integration
+- **Admin Dashboard**: Manage clients, users, cameras, and AI settings
+- **Edge Device Management**: Provision and monitor edge devices
+- **Incident Storage**: Receive and store incidents from edge devices
+- **Role-Based Access Control**: Super Admin, Client Owner, Client Staff, Client Viewer
+- **React Frontend**: Built-in admin dashboard UI
 
----
+## Quick Start
 
-# QUICK INSTALL
+### Option 1: Using Setup Script
 
 ```bash
-# 1. Clone repo
-git clone https://github.com/YOUR_USER/secureguard.git
-cd secureguard/central-server
+# Make script executable
+chmod +x setup.sh
 
-# 2. Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
+# Run setup (builds frontend and installs dependencies)
+./setup.sh
 
-# 3. Install dependencies (lightweight - no ML!)
+# Start the server
+python server.py
+```
+
+### Option 2: Manual Setup
+
+```bash
+# Install Python dependencies
 pip install -r requirements.txt
 
-# 4. Configure environment
+# Build the React frontend (from /app/frontend directory)
+cd ../frontend
+yarn install && yarn build
+
+# Copy build to central-server
+mkdir -p frontend
+cp -r ../frontend/build frontend/
+
+# Start the server
+python server.py
+```
+
+## Configuration
+
+Copy `.env.example` to `.env` and configure:
+
+```bash
 cp .env.example .env
-nano .env  # Edit with your settings
-
-# 5. Start MongoDB
-sudo systemctl start mongod
-
-# 6. Run server
-uvicorn server:app --host 0.0.0.0 --port 8001
 ```
 
----
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MONGO_URL` | MongoDB connection string | `mongodb://localhost:27017` |
+| `DB_NAME` | Database name | `secureguard_central` |
+| `CORS_ORIGINS` | Allowed CORS origins | `*` |
+| `CENTRAL_SERVER_URL` | Public URL of this server | - |
+| `API_KEY_SALT` | Salt for API key hashing | `secureguard` |
 
-# REQUIREMENTS
+## API Endpoints
 
-## Server Specs (Minimal)
-- **CPU**: 2 vCPU
-- **RAM**: 4GB
-- **Storage**: 50GB SSD
-- **OS**: Ubuntu 22.04
-- **Cost**: ~$20-40/month
+### Authentication
+- `POST /api/auth/session` - Process OAuth callback
+- `GET /api/auth/me` - Get current user
+- `POST /api/auth/logout` - Logout
 
-## Recommended VPS Providers
-- DigitalOcean Droplet: $24/mo (2vCPU, 4GB)
-- Vultr Cloud: $24/mo
-- Linode Shared: $24/mo
-- Hetzner Cloud: €8/mo (~$9)
+### Admin Dashboard
+- `GET /api/admin/dashboard/stats` - Dashboard statistics
+- `GET /api/admin/system/health` - System health
 
----
-
-# CONFIGURATION
-
-## Environment Variables (.env)
-
-```env
-# MongoDB
-MONGO_URL=mongodb://localhost:27017
-DB_NAME=secureguard_central
-
-# Authentication
-EMERGENT_API_KEY=your_key_here
-API_KEY=3ca173b8c6d5b24d4317b226435ed37dd80791156f380bb4523d3b29114cf903
-
-# Alerts (optional)
-TWILIO_ACCOUNT_SID=ACxxxxx
-TWILIO_AUTH_TOKEN=xxxxx
-TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
-
-# Billing (optional)
-STRIPE_SECRET_KEY=sk_xxxxx
-STRIPE_WEBHOOK_SECRET=whsec_xxxxx
-
-# Security
-JWT_SECRET=your-random-secret-key
-JWT_SECRET=9807c42391e28bc77702f3bf9b0262d9e9cf0cedd55bc83b85083f6dc8bf39846acecdc2102a131345c289535da44d9de3e98eea1e4d56090dd2e03adbc942e3
-API_KEY_SALT=your-random-salt
-API_KEY_SALT=80e20a23e11d9c76f0ab2306f1b42499b9ec0ea20589f5d4a488e5f239b95d11
-
-# CORS (add your domain)
-CORS_ORIGINS=https://yourdomain.com,http://localhost:3000
-```
-
----
-
-# API ENDPOINTS
-
-## For Admin Dashboard
-- `GET /api/admin/dashboard/stats` - Platform statistics
-- `GET /api/admin/clients` - List all clients
+### Client Management
+- `GET /api/admin/clients` - List clients
 - `POST /api/admin/clients` - Create client
-- `GET /api/admin/edge-devices` - List edge devices
-- `POST /api/admin/edge-devices/provision` - Generate credentials
+- `GET /api/admin/clients/{client_id}` - Get client details
+- `PUT /api/admin/clients/{client_id}` - Update client
+- `DELETE /api/admin/clients/{client_id}` - Delete client
 
-## For Edge Devices (called by edge devices)
-- `POST /api/edge/register` - Register new edge device
-- `POST /api/edge/heartbeat` - Health check
+### Edge Device Management
+- `POST /api/admin/edge-devices/provision` - Provision new device
+- `GET /api/admin/edge-devices` - List all devices
+
+### Edge Device API (called by edge devices)
+- `POST /api/edge/register` - Register device
+- `POST /api/edge/heartbeat` - Send heartbeat
 - `POST /api/edge/incidents` - Upload incident
-- `POST /api/edge/sync` - Sync watchlist, settings
-- `GET /api/edge/config/{client_id}` - Get client config
 
-## For Client Dashboard
-- `GET /api/dashboard/stats` - Client's stats
-- `GET /api/incidents` - Client's incidents
-- `GET /api/cameras` - Client's cameras (from edge)
+## First Login
 
----
+1. Navigate to `http://your-server:8001`
+2. Click "Sign in with Google"
+3. The **first user** to log in becomes the **Super Admin**
+4. Subsequent users get the "Client Viewer" role (admins can promote them)
 
-# PRODUCTION SETUP
+## Architecture
 
-## 1. Nginx Reverse Proxy
-```nginx
-server {
-    listen 80;
-    server_name api.yourdomain.com;
-
-    location / {
-        proxy_pass http://localhost:8001;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    CENTRAL SERVER (Cloud)                    │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐   │
+│  │   FastAPI   │  │   MongoDB   │  │   React Frontend    │   │
+│  │   Backend   │──│   Database  │  │   (Admin Dashboard) │   │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘   │
+│         │                                      │              │
+│         │  ◄──── Incidents/Heartbeats ────────┤              │
+│         │                                      │              │
+└─────────┼──────────────────────────────────────┼──────────────┘
+          │                                      │
+          ▼                                      ▼
+┌─────────────────────┐              ┌─────────────────────┐
+│   EDGE DEVICE #1    │              │   EDGE DEVICE #2    │
+│  ┌───────────────┐  │              │  ┌───────────────┐  │
+│  │ ML Processing │  │              │  │ ML Processing │  │
+│  │ YOLO/DeepFace │  │              │  │ YOLO/DeepFace │  │
+│  │ GPT-5.2 Vision│  │              │  │ GPT-5.2 Vision│  │
+│  └───────────────┘  │              │  └───────────────┘  │
+│         │           │              │         │           │
+│         ▼           │              │         ▼           │
+│  ┌───────────────┐  │              │  ┌───────────────┐  │
+│  │ RTSP Cameras  │  │              │  │ RTSP Cameras  │  │
+│  └───────────────┘  │              │  └───────────────┘  │
+└─────────────────────┘              └─────────────────────┘
+     Client Site A                        Client Site B
 ```
 
-## 2. SSL with Let's Encrypt
+## Development
+
 ```bash
-sudo certbot --nginx -d api.yourdomain.com
+# Run with auto-reload
+uvicorn server:app --host 0.0.0.0 --port 8001 --reload
 ```
 
-## 3. PM2 Process Manager
+## Production Deployment
+
+For production, consider:
+
+1. **Use a proper WSGI server**: gunicorn with uvicorn workers
+2. **Set up HTTPS**: Use nginx as a reverse proxy with SSL
+3. **Configure MongoDB**: Use MongoDB Atlas or a secured instance
+4. **Set secure environment variables**: Don't use default API_KEY_SALT
+
 ```bash
-pm2 start "uvicorn server:app --host 0.0.0.0 --port 8001" --name central-server
-pm2 save
-pm2 startup
+# Production command example
+gunicorn server:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8001
 ```
-
----
-
-# SCALING
-
-| Clients | Server Spec | Cost |
-|---------|-------------|------|
-| 1-10 | 2 vCPU, 4GB | $24/mo |
-| 10-50 | 4 vCPU, 8GB | $48/mo |
-| 50-200 | 8 vCPU, 16GB | $96/mo |
-| 200+ | Load balanced cluster | $200+/mo |
