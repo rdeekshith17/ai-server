@@ -601,11 +601,14 @@ async def logout(request: Request, response: Response):
     if session_token:
         await db.user_sessions.delete_one({"session_token": session_token})
     
+    # Detect if running over HTTPS
+    is_secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    
     response.delete_cookie(
         key="session_token",
         path="/",
-        secure=True,
-        samesite="none"
+        secure=is_secure,
+        samesite="none" if is_secure else "lax"
     )
     
     return {"success": True, "message": "Logged out successfully"}
