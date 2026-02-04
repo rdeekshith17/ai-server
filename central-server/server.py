@@ -255,6 +255,18 @@ class AuthResponse(BaseModel):
     success: bool
     user: Optional[UserResponse] = None
     message: Optional[str] = None
+    token: Optional[str] = None
+
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str
+    name: str
 
 
 class ClientCreate(BaseModel):
