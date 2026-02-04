@@ -361,6 +361,22 @@ def hash_api_key(api_key: str) -> str:
     return hashlib.sha256(f"{api_key}{salt}".encode()).hexdigest()
 
 
+def hash_password(password: str) -> str:
+    """Hash password for storage"""
+    salt = os.environ.get("PASSWORD_SALT", "secureguard_pwd")
+    return hashlib.sha256(f"{password}{salt}".encode()).hexdigest()
+
+
+def verify_password(password: str, hashed: str) -> bool:
+    """Verify password against hash"""
+    return hash_password(password) == hashed
+
+
+def generate_session_token() -> str:
+    """Generate a secure session token"""
+    return secrets.token_urlsafe(32)
+
+
 async def verify_edge_api_key(client_id: str, api_key: str) -> bool:
     """Verify edge device API key"""
     hashed = hash_api_key(api_key)
