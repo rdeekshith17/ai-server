@@ -444,6 +444,8 @@ async def process_session(request: Request, response: Response):
         body = await request.json()
         session_id = body.get("session_id")
         
+        logger.info(f"Processing session: {session_id[:20]}..." if session_id else "No session_id")
+        
         if not session_id:
             return AuthResponse(success=False, message="Missing session_id")
         
