@@ -465,6 +465,178 @@ async def require_admin(request: Request) -> Dict[str, Any]:
 # AUTH ROUTES
 # ===========================================
 
+@api_router.post("/auth/register", response_model=AuthResponse)
+async def register_user(data: UserRegister, request: Request, response: Response):
+    """Register a new user with email/password"""
+    try:
+        # Check if user already exists
+        existing_user = await db.users.find_one({"email": data.email})
+        if existing_user:
+            return AuthResponse(success=False, message="Email already registered")
+        
+        # Check if this is the first user (becomes super admin)
+        user_count = await db.users.count_documents({})
+        user_id = f"usr_{uuid.uuid4().hex[:12]}"
+        
+        if user_count == 0:
+            role = UserRole.SUPER_ADMIN
+            client_id = None
+        else:
+            role = UserRole.CLIENT_VIEWER
+            client_id = None
+        
+        # Create user
+        new_user = {
+            "user_id": user_id,
+            "email": data.email,
+            "name": data.name,
+            "password_hash": hash_password(data.password),
+            "picture": None,
+            "role": role,
+            "client_id": client_id,
+            "is_active": True,
+            "auth_provider": "local",
+            "login_count": 1,
+            "last_login_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc)
+        }
+        await db.users.insert_one(new_user)
+        
+        # Create session
+        session_token = generate_session_token()
+        expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_EXPIRY_DAYS)
+        await db.user_sessions.insert_one({
+            "user_id": user_id,
+            "session_token": session_token,
+            "expires_at": expires_at,
+            "created_at": datetime.now(timezone.utc)
+        })
+        
+        # Set cookie
+        is_secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+        response.set_cookie(
+            key="session_token",
+            value=session_token,
+            httponly=True,
+            secure=is_secure,
+            samesite="none" if is_secure else "lax",
+            path="/",
+            max_age=SESSION_EXPIRY_DAYS * 24 * 60 * 60
+        )
+        
+        permissions = UserPermissions.get_permissions(role)
+        
+        logger.info(f"User registered: {data.email}, role: {role}")
+        
+        return AuthResponse(
+            success=True,
+            token=session_token,
+            user=UserResponse(
+                user_id=user_id,
+                email=data.email,
+                name=data.name,
+                picture=None,
+                role=role,
+                permissions=permissions,
+                client_id=client_id,
+                client_name=None
+            )
+        )
+        
+    except Exception as e:
+        logger.error(f"Registration error: {e}")
+        return AuthResponse(success=False, message=str(e))
+
+
+@api_router.post("/auth/login", response_model=AuthResponse)
+async def login_user(data: UserLogin, request: Request, response: Response):
+    """Login with email/password"""
+    try:
+        # Find user
+        user = await db.users.find_one({"email": data.email}, {"_id": 0})
+        
+        if not user:
+            return AuthResponse(success=False, message="Invalid email or password")
+        
+        # Check password
+        if not user.get("password_hash"):
+            return AuthResponse(success=False, message="This account uses Google login. Please sign in with Google.")
+        
+        if not verify_password(data.password, user["password_hash"]):
+            return AuthResponse(success=False, message="Invalid email or password")
+        
+        if not user.get("is_active", True):
+            return AuthResponse(success=False, message="Account is disabled")
+        
+        # Update login stats
+        await db.users.update_one(
+            {"user_id": user["user_id"]},
+            {
+                "$set": {
+                    "last_login_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc)
+                },
+                "$inc": {"login_count": 1}
+            }
+        )
+        
+        # Create session
+        session_token = generate_session_token()
+        expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_EXPIRY_DAYS)
+        await db.user_sessions.insert_one({
+            "user_id": user["user_id"],
+            "session_token": session_token,
+            "expires_at": expires_at,
+            "created_at": datetime.now(timezone.utc)
+        })
+        
+        # Set cookie
+        is_secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+        response.set_cookie(
+            key="session_token",
+            value=session_token,
+            httponly=True,
+            secure=is_secure,
+            samesite="none" if is_secure else "lax",
+            path="/",
+            max_age=SESSION_EXPIRY_DAYS * 24 * 60 * 60
+        )
+        
+        # Get client info
+        client_name = None
+        if user.get("client_id"):
+            client_doc = await db.clients.find_one(
+                {"client_id": user["client_id"]},
+                {"_id": 0, "name": 1}
+            )
+            if client_doc:
+                client_name = client_doc["name"]
+        
+        permissions = UserPermissions.get_permissions(user.get("role", UserRole.CLIENT_VIEWER))
+        
+        logger.info(f"User logged in: {data.email}")
+        
+        return AuthResponse(
+            success=True,
+            token=session_token,
+            user=UserResponse(
+                user_id=user["user_id"],
+                email=user["email"],
+                name=user["name"],
+                picture=user.get("picture"),
+                role=user.get("role", UserRole.CLIENT_VIEWER),
+                permissions=permissions,
+                client_id=user.get("client_id"),
+                client_name=client_name
+            )
+        )
+        
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        return AuthResponse(success=False, message=str(e))
+
+
 @api_router.post("/auth/session", response_model=AuthResponse)
 async def process_session(request: Request, response: Response):
     """Process session_id from Emergent OAuth callback"""
