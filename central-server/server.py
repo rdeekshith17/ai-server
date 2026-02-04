@@ -751,6 +751,7 @@ async def process_session(request: Request, response: Response):
         
         return AuthResponse(
             success=True,
+            token=session_data.session_token,
             user=UserResponse(
                 user_id=user_id,
                 email=session_data.email,
