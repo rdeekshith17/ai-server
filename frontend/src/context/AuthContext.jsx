@@ -5,6 +5,15 @@ import { Loader2 } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
+// Configure axios to include token from localStorage
+axios.interceptors.request.use((config) => {
+  const token = localStorage.getItem("session_token");
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 // Auth Context
 const AuthContext = createContext(null);
 
@@ -29,7 +38,7 @@ export function AuthProvider({ children }) {
       return;
     }
 
-    // Check if user data was passed from AuthCallback
+    // Check if user data was passed from AuthCallback or Login
     if (location.state?.user) {
       setUser(location.state.user);
       setLoading(false);
@@ -46,10 +55,14 @@ export function AuthProvider({ children }) {
           setUser(response.data.user);
         } else {
           setUser(null);
+          // Clear invalid token
+          localStorage.removeItem("session_token");
         }
       } catch (error) {
         console.error("Auth check failed:", error);
         setUser(null);
+        // Clear invalid token
+        localStorage.removeItem("session_token");
       } finally {
         setLoading(false);
       }
@@ -64,6 +77,8 @@ export function AuthProvider({ children }) {
     } catch (error) {
       console.error("Logout error:", error);
     }
+    // Clear token from localStorage
+    localStorage.removeItem("session_token");
     setUser(null);
     navigate("/login", { replace: true });
   };
