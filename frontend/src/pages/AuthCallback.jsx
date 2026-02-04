@@ -7,7 +7,6 @@ const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 /**
  * AuthCallback - Processes OAuth callback from Emergent Auth
- * REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
  */
 export default function AuthCallback() {
   const navigate = useNavigate();
@@ -41,6 +40,11 @@ export default function AuthCallback() {
         );
 
         if (response.data.success && response.data.user) {
+          // Store token in localStorage for cross-origin requests
+          if (response.data.token) {
+            localStorage.setItem("session_token", response.data.token);
+          }
+          
           // Clear the hash from URL
           window.history.replaceState(null, "", window.location.pathname);
           
