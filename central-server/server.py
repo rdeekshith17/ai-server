@@ -535,6 +535,8 @@ async def process_session(request: Request, response: Response):
         # Detect if running over HTTPS
         is_secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
         
+        logger.info(f"Setting cookie - is_secure: {is_secure}, user_id: {user_id}, role: {role}")
+        
         response.set_cookie(
             key="session_token",
             value=session_data.session_token,
