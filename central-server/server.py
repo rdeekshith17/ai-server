@@ -530,12 +530,15 @@ async def process_session(request: Request, response: Response):
                 client_name = client_doc["name"]
         
         # Set httpOnly cookie
+        # Detect if running over HTTPS
+        is_secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+        
         response.set_cookie(
             key="session_token",
             value=session_data.session_token,
             httponly=True,
-            secure=True,
-            samesite="none",
+            secure=is_secure,
+            samesite="none" if is_secure else "lax",
             path="/",
             max_age=SESSION_EXPIRY_DAYS * 24 * 60 * 60
         )
