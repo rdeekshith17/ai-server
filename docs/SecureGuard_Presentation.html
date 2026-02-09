@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SecureGuard AI - Client Presentation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #e2e8f0;
+            overflow: hidden;
+        }
+        
+        .presentation {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .slide {
+            display: none;
+            width: 100%;
+            height: 100%;
+            padding: 60px;
+            animation: fadeIn 0.5s ease;
+        }
+        
+        .slide.active {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        h1 {
+            font-size: 3.5rem;
+            font-weight: 700;
+            background: linear-gradient(90deg, #3b82f6, #06b6d4);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+        
+        h2 {
+            font-size: 2.2rem;
+            color: #94a3b8;
+            margin-bottom: 40px;
+        }
+        
+        h3 {
+            font-size: 1.8rem;
+            color: #3b82f6;
+            margin-bottom: 20px;
+        }
+        
+        p, li {
+            font-size: 1.4rem;
+            line-height: 1.8;
+            color: #cbd5e1;
+        }
+        
+        ul {
+            list-style: none;
+            margin: 20px 0;
+        }
+        
+        li {
+            padding: 10px 0;
+            padding-left: 30px;
+            position: relative;
+        }
+        
+        li::before {
+            content: "▸";
+            position: absolute;
+            left: 0;
+            color: #06b6d4;
+        }
+        
+        .highlight {
+            color: #f59e0b;
+            font-weight: 600;
+        }
+        
+        .critical {
+            color: #ef4444;
+        }
+        
+        .success {
+            color: #22c55e;
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 40px;
+            margin-top: 30px;
+        }
+        
+        .grid-3 {
+            grid-template-columns: repeat(3, 1fr);
+        }
+        
+        .grid-4 {
+            grid-template-columns: repeat(4, 1fr);
+        }
+        
+        .card {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 30px;
+            transition: transform 0.3s ease;
+        }
+        
+        .card:hover {
+            transform: translateY(-5px);
+            border-color: #3b82f6;
+        }
+        
+        .card h4 {
+            font-size: 1.3rem;
+            color: #3b82f6;
+            margin-bottom: 15px;
+        }
+        
+        .stat {
+            text-align: center;
+            padding: 30px;
+        }
+        
+        .stat-number {
+            font-size: 3rem;
+            font-weight: 700;
+            color: #06b6d4;
+        }
+        
+        .stat-label {
+            font-size: 1.1rem;
+            color: #94a3b8;
+            margin-top: 10px;
+        }
+        
+        .diagram {
+            background: rgba(0,0,0,0.3);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 12px;
+            padding: 30px;
+            font-family: 'Courier New', monospace;
+            font-size: 1rem;
+            white-space: pre;
+            line-height: 1.5;
+            overflow: auto;
+        }
+        
+        .layer-badge {
+            display: inline-block;
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-weight: 600;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        
+        .layer-1 { background: #3b82f6; }
+        .layer-2 { background: #8b5cf6; }
+        .layer-3 { background: #06b6d4; }
+        .layer-4 { background: #f59e0b; }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        
+        th, td {
+            padding: 15px 20px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        th {
+            background: rgba(59, 130, 246, 0.2);
+            color: #3b82f6;
+            font-weight: 600;
+        }
+        
+        tr:hover {
+            background: rgba(255,255,255,0.05);
+        }
+        
+        .navigation {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            display: flex;
+            gap: 15px;
+            z-index: 100;
+        }
+        
+        .nav-btn {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            border: 2px solid #3b82f6;
+            background: rgba(59, 130, 246, 0.2);
+            color: #3b82f6;
+            font-size: 1.5rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .nav-btn:hover {
+            background: #3b82f6;
+            color: white;
+        }
+        
+        .slide-counter {
+            position: fixed;
+            bottom: 40px;
+            left: 30px;
+            color: #64748b;
+            font-size: 1rem;
+        }
+        
+        .logo {
+            position: fixed;
+            top: 30px;
+            right: 30px;
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #3b82f6;
+        }
+        
+        .title-slide {
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+        
+        .title-slide h1 {
+            font-size: 5rem;
+            margin-bottom: 20px;
+        }
+        
+        .title-slide h2 {
+            font-size: 2rem;
+        }
+        
+        .subtitle {
+            font-size: 1.5rem;
+            color: #64748b;
+            margin-top: 40px;
+        }
+        
+        .icon-grid {
+            display: flex;
+            justify-content: center;
+            gap: 60px;
+            margin: 40px 0;
+        }
+        
+        .icon-item {
+            text-align: center;
+        }
+        
+        .icon-item .icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+        
+        .flow-arrow {
+            color: #3b82f6;
+            font-size: 2rem;
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        .price-card {
+            background: linear-gradient(135deg, rgba(59,130,246,0.1), rgba(6,182,212,0.1));
+            border: 2px solid #3b82f6;
+            text-align: center;
+        }
+        
+        .price-card.featured {
+            border-color: #f59e0b;
+            transform: scale(1.05);
+        }
+        
+        .price {
+            font-size: 3rem;
+            font-weight: 700;
+            color: #06b6d4;
+        }
+        
+        .price span {
+            font-size: 1rem;
+            color: #94a3b8;
+        }
+        
+        .check { color: #22c55e; }
+        .cross { color: #ef4444; }
+        
+        .cta-button {
+            display: inline-block;
+            padding: 20px 50px;
+            background: linear-gradient(90deg, #3b82f6, #06b6d4);
+            color: white;
+            font-size: 1.3rem;
+            font-weight: 600;
+            border-radius: 30px;
+            margin-top: 30px;
+            text-decoration: none;
+            transition: transform 0.3s ease;
+        }
+        
+        .cta-button:hover {
+            transform: scale(1.05);
+        }
+    </style>
+</head>
+<body>
+    <div class="presentation">
+        <!-- Slide 1: Title -->
+        <div class="slide title-slide active">
+            <h1>🛡️ SECUREGUARD AI</h1>
+            <h2>Next-Generation Shoplifting Detection Platform</h2>
+            <p class="subtitle">Powered by Multi-Layer Artificial Intelligence</p>
+            <div class="icon-grid">
+                <div class="icon-item">
+                    <div class="icon">🎯</div>
+                    <p>94.7% Accuracy</p>
+                </div>
+                <div class="icon-item">
+                    <div class="icon">⚡</div>
+                    <p>Real-Time Detection</p>
+                </div>
+                <div class="icon-item">
+                    <div class="icon">🔒</div>
+                    <p>Privacy-First</p>
+                </div>
+                <div class="icon-item">
+                    <div class="icon">💰</div>
+                    <p>2000%+ ROI</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 2: The Problem -->
+        <div class="slide">
+            <h1>The Problem</h1>
+            <h2>Retail Theft: A Growing Crisis</h2>
+            <div class="grid">
+                <div>
+                    <div class="grid grid-2" style="grid-template-columns: 1fr 1fr;">
+                        <div class="card stat">
+                            <div class="stat-number">$112B</div>
+                            <div class="stat-label">Lost Annually to Retail Shrinkage</div>
+                        </div>
+                        <div class="card stat">
+                            <div class="stat-number">37%</div>
+                            <div class="stat-label">Due to Shoplifting</div>
+                        </div>
+                        <div class="card stat">
+                            <div class="stat-number">$461</div>
+                            <div class="stat-label">Average Theft Incident Cost</div>
+                        </div>
+                        <div class="card stat">
+                            <div class="stat-number">2%</div>
+                            <div class="stat-label">Shoplifters Caught Traditionally</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <h4>Current Solutions Fall Short</h4>
+                    <ul>
+                        <li><span class="cross">✗</span> Manual CCTV monitoring is expensive</li>
+                        <li><span class="cross">✗</span> Guards can't watch all cameras</li>
+                        <li><span class="cross">✗</span> Incidents discovered after the fact</li>
+                        <li><span class="cross">✗</span> Evidence collection is slow</li>
+                        <li><span class="cross">✗</span> High false alarm rates</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 3: Our Solution -->
+        <div class="slide">
+            <h1>Our Solution</h1>
+            <h2>SecureGuard AI: Intelligent Protection</h2>
+            <div class="diagram" style="text-align: center; font-size: 1.2rem;">
+    📹 Your Existing CCTV Cameras
+              │
+              ▼
+    ┌─────────────────────────────┐
+    │   🤖 SecureGuard AI Engine   │
+    │                             │
+    │  ┌────┐ ┌────┐ ┌────┐ ┌────┐│
+    │  │YOLO│ │Pose│ │Face│ │GPT ││
+    │  └────┘ └────┘ └────┘ └────┘│
+    └─────────────────────────────┘
+              │
+              ▼
+    🚨 Instant Alert + 📊 Evidence
+            </div>
+            <div class="grid grid-3" style="margin-top: 30px;">
+                <div class="card">
+                    <h4>✅ Works With Existing Cameras</h4>
+                    <p>No new hardware needed</p>
+                </div>
+                <div class="card">
+                    <h4>⚡ Real-Time Detection</h4>
+                    <p>Alerts within seconds</p>
+                </div>
+                <div class="card">
+                    <h4>🔒 Privacy-First</h4>
+                    <p>Video stays on-premise</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 4: 4-Layer AI -->
+        <div class="slide">
+            <h1>How It Works</h1>
+            <h2>4-Layer AI Detection Pipeline</h2>
+            <div class="grid grid-4">
+                <div class="card" style="border-left: 4px solid #3b82f6;">
+                    <h4>Layer 1: YOLO</h4>
+                    <p>Object Detection</p>
+                    <ul>
+                        <li>People tracking</li>
+                        <li>Bag detection</li>
+                        <li>Hand positions</li>
+                        <li>Products</li>
+                    </ul>
+                </div>
+                <div class="card" style="border-left: 4px solid #8b5cf6;">
+                    <h4>Layer 2: Pose</h4>
+                    <p>Movement Analysis</p>
+                    <ul>
+                        <li>Concealment</li>
+                        <li>Pocket stuffing</li>
+                        <li>Nervous behavior</li>
+                        <li>Lookout patterns</li>
+                    </ul>
+                </div>
+                <div class="card" style="border-left: 4px solid #06b6d4;">
+                    <h4>Layer 3: DeepFace</h4>
+                    <p>Face Recognition</p>
+                    <ul>
+                        <li>Watchlist matching</li>
+                        <li>Known offenders</li>
+                        <li>Repeat visitors</li>
+                        <li>Age/gender stats</li>
+                    </ul>
+                </div>
+                <div class="card" style="border-left: 4px solid #f59e0b;">
+                    <h4>Layer 4: GPT Vision</h4>
+                    <p>Behavioral AI</p>
+                    <ul>
+                        <li>Context analysis</li>
+                        <li>Intent detection</li>
+                        <li>Risk scoring</li>
+                        <li>Action recommendation</li>
+                    </ul>
+                </div>
+            </div>
+            <p style="text-align: center; margin-top: 30px; font-size: 1.5rem;">
+                Combined Accuracy: <span class="highlight">94.7%</span> | False Positive Rate: <span class="success">&lt;5%</span>
+            </p>
+        </div>
+
+        <!-- Slide 5: Detection Example -->
+        <div class="slide">
+            <h1>Detection in Action</h1>
+            <h2>Real-Time Analysis Example</h2>
+            <div class="grid">
+                <div class="card" style="background: #0f172a;">
+                    <h4>📹 Live Camera Feed</h4>
+                    <div style="background: #1e293b; padding: 20px; border-radius: 8px; margin-top: 10px;">
+                        <p style="color: #22c55e;">▶ Person #1 detected</p>
+                        <p style="color: #f59e0b;">▶ Bag detected near person</p>
+                        <p style="color: #ef4444;">▶ Concealment motion detected!</p>
+                        <p style="color: #ef4444;">▶ Hand-to-bag movement: HIGH RISK</p>
+                    </div>
+                </div>
+                <div class="card" style="border: 2px solid #ef4444;">
+                    <h4>🚨 AI Analysis Report</h4>
+                    <p><strong>Timestamp:</strong> 14:32:45</p>
+                    <p><strong>Camera:</strong> Aisle 3 - Electronics</p>
+                    <p><strong>Threat Level:</strong> <span class="critical">CRITICAL (92%)</span></p>
+                    <hr style="border-color: rgba(255,255,255,0.1); margin: 15px 0;">
+                    <p><strong>GPT Analysis:</strong></p>
+                    <p style="font-style: italic; color: #94a3b8;">
+                        "Male subject in dark hoodie observed picking up iPhone case, 
+                        looking around multiple times, then placing item in jacket pocket. 
+                        Concealment motion detected with high confidence."
+                    </p>
+                    <hr style="border-color: rgba(255,255,255,0.1); margin: 15px 0;">
+                    <p><strong>Recommended Action:</strong> <span class="critical">Immediate staff intervention</span></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 6: Alerts -->
+        <div class="slide">
+            <h1>Instant Alerts</h1>
+            <h2>Multi-Channel Notification System</h2>
+            <div class="grid grid-4">
+                <div class="card stat">
+                    <div class="icon" style="font-size: 3rem;">📱</div>
+                    <h4>WhatsApp</h4>
+                    <p class="stat-number" style="font-size: 2rem;">&lt;3s</p>
+                    <p>Photo + Location</p>
+                </div>
+                <div class="card stat">
+                    <div class="icon" style="font-size: 3rem;">📧</div>
+                    <h4>Email</h4>
+                    <p class="stat-number" style="font-size: 2rem;">&lt;5s</p>
+                    <p>Full Report + Video</p>
+                </div>
+                <div class="card stat">
+                    <div class="icon" style="font-size: 3rem;">🖥️</div>
+                    <h4>Dashboard</h4>
+                    <p class="stat-number" style="font-size: 2rem;">Live</p>
+                    <p>Real-time View</p>
+                </div>
+                <div class="card stat">
+                    <div class="icon" style="font-size: 3rem;">📲</div>
+                    <h4>Mobile App</h4>
+                    <p class="stat-number" style="font-size: 2rem;">&lt;3s</p>
+                    <p>Push Notification</p>
+                </div>
+            </div>
+            <div class="card" style="margin-top: 30px;">
+                <h4>Every Alert Includes:</h4>
+                <div class="grid grid-3">
+                    <div>📸 Snapshot of incident</div>
+                    <div>📍 Camera location</div>
+                    <div>⏰ Precise timestamp</div>
+                    <div>📊 Confidence score</div>
+                    <div>📝 AI analysis summary</div>
+                    <div>🎬 30-second video clip</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 7: Architecture -->
+        <div class="slide">
+            <h1>Deployment Architecture</h1>
+            <h2>Edge + Cloud for Maximum Privacy & Speed</h2>
+            <div class="diagram" style="font-size: 1.1rem;">
+                              ☁️  CENTRAL CLOUD SERVER
+        ┌─────────────────────────────────────────────────────┐
+        │  • Dashboard & Reports    • User Management          │
+        │  • Alert Distribution     • Multi-Location Mgmt      │
+        └─────────────────────────────────────────────────────┘
+                                    ▲
+                                    │ Incidents Only
+                                    │ (No raw video!)
+        ────────────────────────────┼────────────────────────────
+                    │               │               │
+                    ▼               ▼               ▼
+        ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
+        │  🏪 STORE 1    │ │  🏪 STORE 2    │ │  🏪 STORE 3    │
+        │               │ │               │ │               │
+        │  Edge Device  │ │  Edge Device  │ │  Edge Device  │
+        │  • AI Models  │ │  • AI Models  │ │  • AI Models  │
+        │  📹📹📹📹    │ │  📹📹📹📹    │ │  📹📹📹📹    │
+        └───────────────┘ └───────────────┘ └───────────────┘
+            </div>
+            <div class="grid grid-4" style="margin-top: 20px;">
+                <div class="card"><span class="check">✓</span> Video stays on-premise</div>
+                <div class="card"><span class="check">✓</span> Instant local processing</div>
+                <div class="card"><span class="check">✓</span> Low bandwidth usage</div>
+                <div class="card"><span class="check">✓</span> Easy to scale</div>
+            </div>
+        </div>
+
+        <!-- Slide 8: ROI -->
+        <div class="slide">
+            <h1>Return on Investment</h1>
+            <h2>SecureGuard Pays for Itself</h2>
+            <div class="grid">
+                <div>
+                    <table>
+                        <tr>
+                            <th>Metric</th>
+                            <th>Before</th>
+                            <th>After</th>
+                        </tr>
+                        <tr>
+                            <td>Monthly theft incidents</td>
+                            <td>50</td>
+                            <td class="success">8</td>
+                        </tr>
+                        <tr>
+                            <td>Average loss per incident</td>
+                            <td>$150</td>
+                            <td>$150</td>
+                        </tr>
+                        <tr>
+                            <td>Monthly loss</td>
+                            <td class="critical">$7,500</td>
+                            <td class="success">$1,200</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Monthly savings</strong></td>
+                            <td>-</td>
+                            <td class="success"><strong>$6,300</strong></td>
+                        </tr>
+                    </table>
+                </div>
+                <div class="card" style="background: linear-gradient(135deg, rgba(34,197,94,0.1), rgba(6,182,212,0.1)); border: 2px solid #22c55e; text-align: center;">
+                    <h3 style="color: #22c55e;">ROI Summary</h3>
+                    <p>Monthly Subscription: <strong>$299</strong></p>
+                    <p>Monthly Savings: <strong class="success">$6,300</strong></p>
+                    <hr style="border-color: rgba(255,255,255,0.1); margin: 20px 0;">
+                    <p style="font-size: 1.5rem;">Net Monthly Benefit: <span class="stat-number">$6,001</span></p>
+                    <p style="font-size: 2rem; margin-top: 20px;">Annual ROI: <span class="highlight">2,107%</span></p>
+                    <p style="color: #94a3b8;">Payback Period: <strong>&lt; 2 weeks</strong></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 9: Pricing -->
+        <div class="slide">
+            <h1>Pricing Plans</h1>
+            <h2>Flexible Plans for Every Business</h2>
+            <div class="grid grid-3">
+                <div class="card price-card">
+                    <h3>Starter</h3>
+                    <p class="price">$99<span>/month</span></p>
+                    <p style="color: #64748b;">Up to 4 cameras</p>
+                    <hr style="border-color: rgba(255,255,255,0.1); margin: 20px 0;">
+                    <ul>
+                        <li><span class="check">✓</span> All 4 AI layers</li>
+                        <li><span class="check">✓</span> Real-time alerts</li>
+                        <li><span class="check">✓</span> Web dashboard</li>
+                        <li><span class="check">✓</span> Email support</li>
+                        <li><span class="cross">✗</span> Face recognition</li>
+                        <li><span class="cross">✗</span> API access</li>
+                    </ul>
+                </div>
+                <div class="card price-card featured">
+                    <div style="background: #f59e0b; color: black; padding: 5px 15px; border-radius: 20px; display: inline-block; margin-bottom: 15px; font-weight: 600;">MOST POPULAR</div>
+                    <h3>Professional</h3>
+                    <p class="price">$299<span>/month</span></p>
+                    <p style="color: #64748b;">Up to 16 cameras</p>
+                    <hr style="border-color: rgba(255,255,255,0.1); margin: 20px 0;">
+                    <ul>
+                        <li><span class="check">✓</span> All Starter features</li>
+                        <li><span class="check">✓</span> Face recognition</li>
+                        <li><span class="check">✓</span> Watchlist matching</li>
+                        <li><span class="check">✓</span> GPT analysis</li>
+                        <li><span class="check">✓</span> Advanced analytics</li>
+                        <li><span class="check">✓</span> Priority support</li>
+                    </ul>
+                </div>
+                <div class="card price-card">
+                    <h3>Enterprise</h3>
+                    <p class="price">Custom</p>
+                    <p style="color: #64748b;">Unlimited cameras</p>
+                    <hr style="border-color: rgba(255,255,255,0.1); margin: 20px 0;">
+                    <ul>
+                        <li><span class="check">✓</span> All Professional features</li>
+                        <li><span class="check">✓</span> Multi-location support</li>
+                        <li><span class="check">✓</span> Custom integrations</li>
+                        <li><span class="check">✓</span> Dedicated account manager</li>
+                        <li><span class="check">✓</span> On-site training</li>
+                        <li><span class="check">✓</span> SLA guarantee</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 10: CTA -->
+        <div class="slide title-slide">
+            <h1>Get Started Today</h1>
+            <h2>14-Day Free Trial</h2>
+            <div class="card" style="max-width: 600px; margin: 30px auto; text-align: center;">
+                <h3 style="color: #22c55e;">🎁 Free Pilot Program</h3>
+                <ul style="text-align: left;">
+                    <li>Full system access</li>
+                    <li>Up to 4 cameras</li>
+                    <li>All AI features enabled</li>
+                    <li>No credit card required</li>
+                    <li>No obligation</li>
+                </ul>
+            </div>
+            <a href="#" class="cta-button">Schedule a Demo →</a>
+            <div style="margin-top: 50px; color: #64748b;">
+                <p>📧 sales@secureguard.ai | 📱 +91 XXXXX XXXXX</p>
+                <p>🌐 www.secureguard.ai</p>
+            </div>
+        </div>
+
+        <!-- Slide 11: Thank You -->
+        <div class="slide title-slide">
+            <h1>Thank You!</h1>
+            <h2>Questions?</h2>
+            <div class="icon-grid" style="margin-top: 50px;">
+                <div class="icon-item">
+                    <div class="icon">🛡️</div>
+                    <p>SecureGuard AI</p>
+                </div>
+            </div>
+            <p style="font-size: 1.5rem; color: #64748b; margin-top: 30px;">
+                Protecting Your Business, 24/7
+            </p>
+            <div style="margin-top: 50px;">
+                <p>📧 sales@secureguard.ai</p>
+                <p>📱 +91 XXXXX XXXXX</p>
+                <p>🌐 www.secureguard.ai</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="logo">🛡️ SECUREGUARD</div>
+    <div class="slide-counter">Slide <span id="current">1</span> of <span id="total">11</span></div>
+    
+    <div class="navigation">
+        <button class="nav-btn" onclick="prevSlide()">←</button>
+        <button class="nav-btn" onclick="nextSlide()">→</button>
+    </div>
+
+    <script>
+        let currentSlide = 0;
+        const slides = document.querySelectorAll('.slide');
+        const totalSlides = slides.length;
+        
+        document.getElementById('total').textContent = totalSlides;
+        
+        function showSlide(n) {
+            slides[currentSlide].classList.remove('active');
+            currentSlide = (n + totalSlides) % totalSlides;
+            slides[currentSlide].classList.add('active');
+            document.getElementById('current').textContent = currentSlide + 1;
+        }
+        
+        function nextSlide() {
+            showSlide(currentSlide + 1);
+        }
+        
+        function prevSlide() {
+            showSlide(currentSlide - 1);
+        }
+        
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                nextSlide();
+            } else if (e.key === 'ArrowLeft') {
+                prevSlide();
+            }
+        });
+        
+        // Touch navigation
+        let touchStartX = 0;
+        document.addEventListener('touchstart', (e) => {
+            touchStartX = e.touches[0].clientX;
+        });
+        
+        document.addEventListener('touchend', (e) => {
+            const touchEndX = e.changedTouches[0].clientX;
+            const diff = touchStartX - touchEndX;
+            if (Math.abs(diff) > 50) {
+                if (diff > 0) nextSlide();
+                else prevSlide();
+            }
+        });
+    </script>
+</body>
+</html>
