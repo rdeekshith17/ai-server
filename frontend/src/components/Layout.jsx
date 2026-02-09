@@ -30,6 +30,7 @@ const navItems = [
   { path: "/watchlist", icon: Users, label: "Watchlist" },
   { path: "/incidents", icon: AlertTriangle, label: "Incidents" },
   { path: "/analytics", icon: BarChart3, label: "Analytics" },
+  { path: "/settings", icon: Settings, label: "Settings" },
 ];
 
 export default function Layout() {
