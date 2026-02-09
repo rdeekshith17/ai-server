@@ -85,7 +85,7 @@ def add_bullet_points(slide, items, left, top, width, height, font_size=18, colo
             p = tf.paragraphs[0]
         else:
             p = tf.add_paragraph()
-        p.text = f"• {item}"
+        p.text = "• " + item
         p.font.size = Pt(font_size)
         p.font.color.rgb = color
         p.space_after = Pt(8)
@@ -96,7 +96,7 @@ def add_card(slide, title, content, left, top, width, height, title_color=CYAN, 
     # Background
     card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
     card.fill.solid()
-    card.fill.fore_color.rgb = RgbColor(30, 41, 59)  # Slightly lighter
+    card.fill.fore_color.rgb = RGBColor(30, 41, 59)  # Slightly lighter
     if border_color:
         card.line.color.rgb = border_color
         card.line.width = Pt(2)
@@ -120,7 +120,7 @@ def add_stat_card(slide, number, label, left, top, width=Inches(2.5), height=Inc
     """Add a statistics card"""
     card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
     card.fill.solid()
-    card.fill.fore_color.rgb = RgbColor(30, 41, 59)
+    card.fill.fore_color.rgb = RGBColor(30, 41, 59)
     card.line.fill.background()
     
     # Number
