@@ -66,6 +66,7 @@ function AppRouter() {
         <Route path="clients" element={<AdminClients />} />
         <Route path="users" element={<AdminUsers />} />
         <Route path="cameras" element={<AdminCameras />} />
+        <Route path="edge-devices" element={<AdminEdgeDevices />} />
         <Route path="incidents" element={<Incidents />} />
         <Route path="ai-control" element={<AdminAIControl />} />
         <Route path="alerts" element={<AdminAlerts />} />
