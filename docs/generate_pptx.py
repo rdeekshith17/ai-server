@@ -4,7 +4,7 @@ SecureGuard AI - PowerPoint Presentation Generator
 
 from pptx import Presentation
 from pptx.util import Inches, Pt
-from pptx.dml.color import RgbColor
+from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.oxml.ns import nsmap
@@ -16,15 +16,15 @@ prs.slide_width = Inches(13.333)
 prs.slide_height = Inches(7.5)
 
 # Colors
-DARK_BG = RgbColor(15, 23, 42)  # #0f172a
-BLUE = RgbColor(59, 130, 246)  # #3b82f6
-CYAN = RgbColor(6, 182, 212)  # #06b6d4
-WHITE = RgbColor(226, 232, 240)  # #e2e8f0
-GRAY = RgbColor(148, 163, 184)  # #94a3b8
-GREEN = RgbColor(34, 197, 94)  # #22c55e
-RED = RgbColor(239, 68, 68)  # #ef4444
-AMBER = RgbColor(245, 158, 11)  # #f59e0b
-PURPLE = RgbColor(139, 92, 246)  # #8b5cf6
+DARK_BG = RGBColor(15, 23, 42)  # #0f172a
+BLUE = RGBColor(59, 130, 246)  # #3b82f6
+CYAN = RGBColor(6, 182, 212)  # #06b6d4
+WHITE = RGBColor(226, 232, 240)  # #e2e8f0
+GRAY = RGBColor(148, 163, 184)  # #94a3b8
+GREEN = RGBColor(34, 197, 94)  # #22c55e
+RED = RGBColor(239, 68, 68)  # #ef4444
+AMBER = RGBColor(245, 158, 11)  # #f59e0b
+PURPLE = RGBColor(139, 92, 246)  # #8b5cf6
 
 def add_background(slide, color=DARK_BG):
     """Add solid background color to slide"""
