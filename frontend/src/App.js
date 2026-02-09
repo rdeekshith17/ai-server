@@ -53,6 +53,7 @@ function AppRouter() {
         <Route path="watchlist" element={<Watchlist />} />
         <Route path="incidents" element={<Incidents />} />
         <Route path="analytics" element={<Analytics />} />
+        <Route path="settings" element={<Settings />} />
       </Route>
       
       {/* Protected Admin Routes */}
