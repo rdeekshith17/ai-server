@@ -366,7 +366,7 @@ add_text_box(slide7, "Dashboard • Reports • User Management • Multi-Locati
 
 # Arrow
 add_text_box(slide7, "▲ Incidents Only (No raw video!)", Inches(5), Inches(3.6), Inches(3), Inches(0.4),
-            font_size(12), color=GREEN, align=PP_ALIGN.CENTER)
+            font_size=12, color=GREEN, align=PP_ALIGN.CENTER)
 
 # Store boxes
 stores = ["🏪 STORE 1", "🏪 STORE 2", "🏪 STORE 3"]
