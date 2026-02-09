@@ -237,7 +237,7 @@ for i, (title, subtitle, content, color) in enumerate(layers):
     # Card background
     card = slide4.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, Inches(2.2), Inches(3), Inches(4))
     card.fill.solid()
-    card.fill.fore_color.rgb = RgbColor(30, 41, 59)
+    card.fill.fore_color.rgb = RGBColor(30, 41, 59)
     card.line.color.rgb = color
     card.line.width = Pt(3)
     
@@ -264,7 +264,7 @@ add_subtitle(slide5, "Real-Time Analysis Example")
 # Live feed simulation
 feed_box = slide5.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.5), Inches(2.2), Inches(5.5), Inches(4.5))
 feed_box.fill.solid()
-feed_box.fill.fore_color.rgb = RgbColor(15, 23, 42)
+feed_box.fill.fore_color.rgb = RGBColor(15, 23, 42)
 feed_box.line.color.rgb = BLUE
 feed_box.line.width = Pt(2)
 
@@ -282,7 +282,7 @@ add_text_box(slide5, detection_log, Inches(0.7), Inches(3), Inches(5), Inches(3.
 # AI Report
 report_box = slide5.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(6.5), Inches(2.2), Inches(6.3), Inches(4.5))
 report_box.fill.solid()
-report_box.fill.fore_color.rgb = RgbColor(30, 41, 59)
+report_box.fill.fore_color.rgb = RGBColor(30, 41, 59)
 report_box.line.color.rgb = RED
 report_box.line.width = Pt(2)
 
@@ -323,7 +323,7 @@ for i, (icon, name, time, desc) in enumerate(alert_channels):
     left = Inches(0.5 + i * 3.2)
     card = slide6.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, Inches(2.3), Inches(2.8), Inches(2))
     card.fill.solid()
-    card.fill.fore_color.rgb = RgbColor(30, 41, 59)
+    card.fill.fore_color.rgb = RGBColor(30, 41, 59)
     card.line.fill.background()
     
     add_text_box(slide6, icon, left, Inches(2.4), Inches(2.8), Inches(0.6),
@@ -354,7 +354,7 @@ add_subtitle(slide7, "Edge + Cloud for Maximum Privacy & Speed")
 # Cloud box
 cloud = slide7.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(3), Inches(2), Inches(7), Inches(1.5))
 cloud.fill.solid()
-cloud.fill.fore_color.rgb = RgbColor(30, 41, 59)
+cloud.fill.fore_color.rgb = RGBColor(30, 41, 59)
 cloud.line.color.rgb = CYAN
 cloud.line.width = Pt(2)
 
@@ -374,7 +374,7 @@ for i, store in enumerate(stores):
     left = Inches(1 + i * 4)
     box = slide7.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, Inches(4.3), Inches(3.5), Inches(2.2))
     box.fill.solid()
-    box.fill.fore_color.rgb = RgbColor(30, 41, 59)
+    box.fill.fore_color.rgb = RGBColor(30, 41, 59)
     box.line.color.rgb = BLUE
     box.line.width = Pt(2)
     
@@ -429,7 +429,7 @@ for row_idx, row in enumerate(table_data):
 # ROI Summary box
 roi_box = slide8.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(7), Inches(2.3), Inches(5.8), Inches(4))
 roi_box.fill.solid()
-roi_box.fill.fore_color.rgb = RgbColor(20, 40, 30)
+roi_box.fill.fore_color.rgb = RGBColor(20, 40, 30)
 roi_box.line.color.rgb = GREEN
 roi_box.line.width = Pt(2)
 
@@ -473,7 +473,7 @@ for i, (name, price, period, cameras, features, featured) in enumerate(plans):
     
     card = slide9.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, Inches(2.2), Inches(3.8), Inches(4.8))
     card.fill.solid()
-    card.fill.fore_color.rgb = RgbColor(30, 41, 59)
+    card.fill.fore_color.rgb = RGBColor(30, 41, 59)
     card.line.color.rgb = AMBER if featured else BLUE
     card.line.width = Pt(3 if featured else 1)
     
@@ -508,7 +508,7 @@ add_text_box(slide10, "14-Day Free Trial", Inches(0.5), Inches(2.4), Inches(12.5
 # Trial box
 trial_box = slide10.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(4), Inches(3.2), Inches(5.5), Inches(2.3))
 trial_box.fill.solid()
-trial_box.fill.fore_color.rgb = RgbColor(20, 40, 30)
+trial_box.fill.fore_color.rgb = RGBColor(20, 40, 30)
 trial_box.line.color.rgb = GREEN
 trial_box.line.width = Pt(2)
 
