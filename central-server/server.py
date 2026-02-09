@@ -1457,6 +1457,45 @@ async def list_edge_devices(request: Request, client_id: Optional[str] = None):
     return {"devices": devices}
 
 
+@api_router.put("/admin/edge-devices/{device_id}")
+async def update_edge_device(request: Request, device_id: str):
+    """Update an edge device"""
+    await require_admin(request)
+    
+    device = await db.edge_devices.find_one({"device_id": device_id})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    body = await request.json()
+    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if "device_name" in body:
+        update_dict["device_name"] = body["device_name"]
+    if "is_active" in body:
+        update_dict["is_active"] = body["is_active"]
+    
+    await db.edge_devices.update_one(
+        {"device_id": device_id},
+        {"$set": update_dict}
+    )
+    
+    return {"success": True, "message": "Device updated"}
+
+
+@api_router.delete("/admin/edge-devices/{device_id}")
+async def delete_edge_device(request: Request, device_id: str):
+    """Delete an edge device"""
+    await require_admin(request)
+    
+    device = await db.edge_devices.find_one({"device_id": device_id})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    await db.edge_devices.delete_one({"device_id": device_id})
+    
+    return {"success": True, "message": "Device deleted"}
+
+
 # ===========================================
 # EDGE DEVICE ROUTES (Called by edge devices)
 # ===========================================
