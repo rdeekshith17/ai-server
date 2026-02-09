@@ -10,6 +10,7 @@ import Watchlist from "./pages/Watchlist";
 import LiveFeed from "./pages/LiveFeed";
 import Login from "./pages/Login";
 import AuthCallback from "./pages/AuthCallback";
+import Settings from "./pages/Settings";
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import AdminClients from "./pages/admin/AdminClients";
 import AdminCameras from "./pages/admin/AdminCameras";
@@ -17,6 +18,7 @@ import AdminUsers from "./pages/admin/AdminUsers";
 import AdminAIControl from "./pages/admin/AdminAIControl";
 import AdminAlerts from "./pages/admin/AdminAlerts";
 import AdminEdgeDevices from "./pages/admin/AdminEdgeDevices";
+import AdminSettings from "./pages/admin/AdminSettings";
 import { Toaster } from "./components/ui/sonner";
 import { AuthProvider, ProtectedRoute } from "./context/AuthContext";
 
