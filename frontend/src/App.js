@@ -74,6 +74,7 @@ function AppRouter() {
         <Route path="ai-control" element={<AdminAIControl />} />
         <Route path="alerts" element={<AdminAlerts />} />
         <Route path="analytics" element={<Analytics />} />
+        <Route path="settings" element={<AdminSettings />} />
       </Route>
     </Routes>
   );
