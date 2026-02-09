@@ -446,7 +446,7 @@ add_text_box(slide8, "$6,001", Inches(7.2), Inches(4.5), Inches(5.4), Inches(0.5
 add_text_box(slide8, "Annual ROI: 2,107%", Inches(7.2), Inches(5.2), Inches(5.4), Inches(0.4),
             font_size=20, color=AMBER, bold=True, align=PP_ALIGN.CENTER)
 add_text_box(slide8, "Payback Period: < 2 weeks", Inches(7.2), Inches(5.7), Inches(5.4), Inches(0.3),
-            font_size(14), color=GRAY, align=PP_ALIGN.CENTER)
+            font_size=14, color=GRAY, align=PP_ALIGN.CENTER)
 
 # ============================================
 # SLIDE 9: Pricing
