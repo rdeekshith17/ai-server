@@ -11,7 +11,9 @@ import {
   PowerOff,
   Camera,
   Users,
-  AlertTriangle
+  AlertTriangle,
+  RefreshCw,
+  X
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
@@ -46,11 +48,24 @@ import { motion } from "framer-motion";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
+// Get auth headers
+const getAuthHeaders = () => {
+  const token = localStorage.getItem("session_token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 const PLANS = [
   { value: "trial", label: "Trial (14 days)", cameras: 2, users: 1 },
-  { value: "basic", label: "Basic ($99/mo)", cameras: 4, users: 2 },
+  { value: "starter", label: "Starter ($99/mo)", cameras: 4, users: 2 },
   { value: "professional", label: "Professional ($299/mo)", cameras: 16, users: 5 },
   { value: "enterprise", label: "Enterprise ($799/mo)", cameras: 64, users: "Unlimited" },
+];
+
+const STATUSES = [
+  { value: "active", label: "Active" },
+  { value: "trial", label: "Trial" },
+  { value: "suspended", label: "Suspended" },
+  { value: "cancelled", label: "Cancelled" },
 ];
 
 export default function AdminClients() {
@@ -58,6 +73,8 @@ export default function AdminClients() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  
+  // Add dialog
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [newClient, setNewClient] = useState({
     name: "",
@@ -67,6 +84,11 @@ export default function AdminClients() {
     contact_phone: "",
     plan: "trial"
   });
+  
+  // Edit dialog
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [editingClient, setEditingClient] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     fetchClients();
@@ -77,7 +99,10 @@ export default function AdminClients() {
       const params = new URLSearchParams();
       if (statusFilter) params.append("status", statusFilter);
       
-      const response = await axios.get(`${API}/admin/clients?${params}`, { withCredentials: true });
+      const response = await axios.get(`${API}/admin/clients?${params}`, { 
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
       setClients(response.data.clients || []);
     } catch (error) {
       console.error("Failed to fetch clients:", error);
@@ -89,12 +114,16 @@ export default function AdminClients() {
 
   const handleAddClient = async () => {
     try {
-      if (!newClient.name || !newClient.slug || !newClient.contact_name || !newClient.contact_email) {
-        toast.error("Please fill in all required fields");
+      if (!newClient.name || !newClient.contact_email) {
+        toast.error("Please fill in required fields (name, email)");
         return;
       }
 
-      const response = await axios.post(`${API}/admin/clients`, newClient, { withCredentials: true });
+      setSaving(true);
+      const response = await axios.post(`${API}/admin/clients`, newClient, { 
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
       
       if (response.data.success) {
         toast.success("Client created successfully");
@@ -112,12 +141,65 @@ export default function AdminClients() {
     } catch (error) {
       console.error("Failed to create client:", error);
       toast.error(error.response?.data?.detail || "Failed to create client");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleEditClient = (client) => {
+    setEditingClient({
+      client_id: client.client_id,
+      name: client.name,
+      contact_name: client.contact?.name || "",
+      contact_email: client.contact?.email || "",
+      contact_phone: client.contact?.phone || "",
+      status: client.status,
+      plan: client.subscription?.plan || "trial"
+    });
+    setShowEditDialog(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingClient) return;
+    
+    try {
+      setSaving(true);
+      const response = await axios.put(
+        `${API}/admin/clients/${editingClient.client_id}`,
+        {
+          name: editingClient.name,
+          contact_name: editingClient.contact_name,
+          contact_email: editingClient.contact_email,
+          contact_phone: editingClient.contact_phone,
+          status: editingClient.status,
+          plan: editingClient.plan
+        },
+        { 
+          withCredentials: true,
+          headers: getAuthHeaders()
+        }
+      );
+      
+      if (response.data.success) {
+        toast.success("Client updated successfully");
+        setShowEditDialog(false);
+        setEditingClient(null);
+        fetchClients();
+      }
+    } catch (error) {
+      console.error("Failed to update client:", error);
+      toast.error(error.response?.data?.detail || "Failed to update client");
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleSuspend = async (clientId) => {
     try {
-      await axios.post(`${API}/admin/clients/${clientId}/suspend`, {}, { withCredentials: true });
+      await axios.post(`${API}/admin/clients/${clientId}/suspend`, {}, { 
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
       toast.success("Client suspended");
       fetchClients();
     } catch (error) {
@@ -127,7 +209,10 @@ export default function AdminClients() {
 
   const handleActivate = async (clientId) => {
     try {
-      await axios.post(`${API}/admin/clients/${clientId}/activate`, {}, { withCredentials: true });
+      await axios.post(`${API}/admin/clients/${clientId}/activate`, {}, { 
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
       toast.success("Client activated");
       fetchClients();
     } catch (error) {
@@ -136,10 +221,13 @@ export default function AdminClients() {
   };
 
   const handleDelete = async (clientId) => {
-    if (!window.confirm("Are you sure? This will delete all client data.")) return;
+    if (!window.confirm("Are you sure? This will delete all client data including cameras, users, and incidents.")) return;
     
     try {
-      await axios.delete(`${API}/admin/clients/${clientId}`, { withCredentials: true });
+      await axios.delete(`${API}/admin/clients/${clientId}`, { 
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
       toast.success("Client deleted");
       fetchClients();
     } catch (error) {
@@ -176,102 +264,10 @@ export default function AdminClients() {
           </p>
         </div>
         
-        <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-          <DialogTrigger asChild>
-            <Button className="flex items-center gap-2" data-testid="add-client-btn">
-              <Plus className="w-4 h-4" />
-              Add Client
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Add New Client</DialogTitle>
-              <DialogDescription>
-                Create a new client account for your platform
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 py-4">
-              <div className="space-y-2">
-                <Label>Company Name *</Label>
-                <Input
-                  placeholder="ABC Liquor Store"
-                  value={newClient.name}
-                  onChange={(e) => {
-                    setNewClient({ 
-                      ...newClient, 
-                      name: e.target.value,
-                      slug: generateSlug(e.target.value)
-                    });
-                  }}
-                  data-testid="client-name-input"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>URL Slug *</Label>
-                <Input
-                  placeholder="abc-liquor"
-                  value={newClient.slug}
-                  onChange={(e) => setNewClient({ ...newClient, slug: generateSlug(e.target.value) })}
-                  data-testid="client-slug-input"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Contact Name *</Label>
-                <Input
-                  placeholder="John Smith"
-                  value={newClient.contact_name}
-                  onChange={(e) => setNewClient({ ...newClient, contact_name: e.target.value })}
-                  data-testid="client-contact-name-input"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Contact Email *</Label>
-                <Input
-                  type="email"
-                  placeholder="john@company.com"
-                  value={newClient.contact_email}
-                  onChange={(e) => setNewClient({ ...newClient, contact_email: e.target.value })}
-                  data-testid="client-contact-email-input"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Contact Phone</Label>
-                <Input
-                  placeholder="+1 555-0123"
-                  value={newClient.contact_phone}
-                  onChange={(e) => setNewClient({ ...newClient, contact_phone: e.target.value })}
-                  data-testid="client-contact-phone-input"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Subscription Plan</Label>
-                <Select
-                  value={newClient.plan}
-                  onValueChange={(value) => setNewClient({ ...newClient, plan: value })}
-                >
-                  <SelectTrigger data-testid="client-plan-select">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PLANS.map(plan => (
-                      <SelectItem key={plan.value} value={plan.value}>
-                        {plan.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setShowAddDialog(false)}>
-                Cancel
-              </Button>
-              <Button onClick={handleAddClient} data-testid="create-client-btn">
-                Create Client
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <Button onClick={() => setShowAddDialog(true)} className="flex items-center gap-2" data-testid="add-client-btn">
+          <Plus className="w-4 h-4" />
+          Add Client
+        </Button>
       </div>
 
       {/* Filters */}
@@ -359,7 +355,7 @@ export default function AdminClients() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleEditClient(client)}>
                             <Pencil className="w-4 h-4 mr-2" />
                             Edit
                           </DropdownMenuItem>
@@ -422,6 +418,179 @@ export default function AdminClients() {
           })}
         </div>
       )}
+
+      {/* Add Client Dialog */}
+      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle style={{ fontFamily: 'Rajdhani, sans-serif' }}>ADD NEW CLIENT</DialogTitle>
+            <DialogDescription>
+              Create a new client account for your platform
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Company Name *</Label>
+              <Input
+                placeholder="ABC Liquor Store"
+                value={newClient.name}
+                onChange={(e) => {
+                  setNewClient({ 
+                    ...newClient, 
+                    name: e.target.value,
+                    slug: generateSlug(e.target.value)
+                  });
+                }}
+                data-testid="client-name-input"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Contact Name</Label>
+              <Input
+                placeholder="John Smith"
+                value={newClient.contact_name}
+                onChange={(e) => setNewClient({ ...newClient, contact_name: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Contact Email *</Label>
+              <Input
+                type="email"
+                placeholder="john@company.com"
+                value={newClient.contact_email}
+                onChange={(e) => setNewClient({ ...newClient, contact_email: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Contact Phone</Label>
+              <Input
+                placeholder="+1 555-0123"
+                value={newClient.contact_phone}
+                onChange={(e) => setNewClient({ ...newClient, contact_phone: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Subscription Plan</Label>
+              <Select
+                value={newClient.plan}
+                onValueChange={(value) => setNewClient({ ...newClient, plan: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PLANS.map(plan => (
+                    <SelectItem key={plan.value} value={plan.value}>
+                      {plan.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleAddClient} disabled={saving}>
+              {saving ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
+              Create Client
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Client Dialog */}
+      <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle style={{ fontFamily: 'Rajdhani, sans-serif' }}>EDIT CLIENT</DialogTitle>
+            <DialogDescription>
+              Update client details
+            </DialogDescription>
+          </DialogHeader>
+          {editingClient && (
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label>Company Name *</Label>
+                <Input
+                  value={editingClient.name}
+                  onChange={(e) => setEditingClient({ ...editingClient, name: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Contact Name</Label>
+                <Input
+                  value={editingClient.contact_name}
+                  onChange={(e) => setEditingClient({ ...editingClient, contact_name: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Contact Email</Label>
+                <Input
+                  type="email"
+                  value={editingClient.contact_email}
+                  onChange={(e) => setEditingClient({ ...editingClient, contact_email: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Contact Phone</Label>
+                <Input
+                  value={editingClient.contact_phone}
+                  onChange={(e) => setEditingClient({ ...editingClient, contact_phone: e.target.value })}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Status</Label>
+                  <Select
+                    value={editingClient.status}
+                    onValueChange={(value) => setEditingClient({ ...editingClient, status: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {STATUSES.map(status => (
+                        <SelectItem key={status.value} value={status.value}>
+                          {status.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Plan</Label>
+                  <Select
+                    value={editingClient.plan}
+                    onValueChange={(value) => setEditingClient({ ...editingClient, plan: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PLANS.map(plan => (
+                        <SelectItem key={plan.value} value={plan.value}>
+                          {plan.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowEditDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveEdit} disabled={saving}>
+              {saving ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
