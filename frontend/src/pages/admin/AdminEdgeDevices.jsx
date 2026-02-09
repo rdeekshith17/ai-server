@@ -13,7 +13,11 @@ import {
   Camera,
   Clock,
   AlertTriangle,
-  X
+  Pencil,
+  Trash2,
+  MoreHorizontal,
+  Power,
+  PowerOff
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
@@ -30,12 +34,29 @@ import {
   DialogTitle,
 } from "../../components/ui/dialog";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu";
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "../../components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../components/ui/alert-dialog";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 
@@ -63,6 +84,16 @@ export default function AdminEdgeDevices() {
   const [showCredentialsDialog, setShowCredentialsDialog] = useState(false);
   const [newCredentials, setNewCredentials] = useState(null);
   const [copiedField, setCopiedField] = useState(null);
+  
+  // Edit dialog
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [editingDevice, setEditingDevice] = useState(null);
+  const [saving, setSaving] = useState(false);
+  
+  // Delete confirmation
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deviceToDelete, setDeviceToDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -128,9 +159,7 @@ export default function AdminEdgeDevices() {
         setNewCredentials(response.data);
         setShowProvisionDialog(false);
         setShowCredentialsDialog(true);
-        setDeviceName("");
-        setSelectedClientId("");
-        fetchData(); // Refresh list
+        fetchData();
         toast.success("Edge device provisioned successfully!");
       } else {
         toast.error(response.data.message || "Failed to provision device");
@@ -140,6 +169,100 @@ export default function AdminEdgeDevices() {
       toast.error(error.response?.data?.detail || "Failed to provision device");
     } finally {
       setProvisioning(false);
+    }
+  };
+
+  const handleEditDevice = (device) => {
+    setEditingDevice({
+      device_id: device.device_id,
+      device_name: device.device_name || "",
+      is_active: device.is_active !== false
+    });
+    setShowEditDialog(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingDevice) return;
+    
+    setSaving(true);
+    try {
+      const response = await axios.put(
+        `${API}/admin/edge-devices/${editingDevice.device_id}`,
+        {
+          device_name: editingDevice.device_name,
+          is_active: editingDevice.is_active
+        },
+        {
+          withCredentials: true,
+          headers: getAuthHeaders()
+        }
+      );
+      
+      if (response.data.success) {
+        toast.success("Device updated successfully");
+        setShowEditDialog(false);
+        setEditingDevice(null);
+        fetchData();
+      }
+    } catch (error) {
+      console.error("Failed to update device:", error);
+      toast.error(error.response?.data?.detail || "Failed to update device");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteClick = (device) => {
+    setDeviceToDelete(device);
+    setShowDeleteDialog(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deviceToDelete) return;
+    
+    setDeleting(true);
+    try {
+      const response = await axios.delete(
+        `${API}/admin/edge-devices/${deviceToDelete.device_id}`,
+        {
+          withCredentials: true,
+          headers: getAuthHeaders()
+        }
+      );
+      
+      if (response.data.success) {
+        toast.success("Device deleted successfully");
+        setShowDeleteDialog(false);
+        setDeviceToDelete(null);
+        fetchData();
+      }
+    } catch (error) {
+      console.error("Failed to delete device:", error);
+      toast.error(error.response?.data?.detail || "Failed to delete device");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleToggleActive = async (device) => {
+    try {
+      const response = await axios.put(
+        `${API}/admin/edge-devices/${device.device_id}`,
+        {
+          is_active: !device.is_active
+        },
+        {
+          withCredentials: true,
+          headers: getAuthHeaders()
+        }
+      );
+      
+      if (response.data.success) {
+        toast.success(device.is_active ? "Device deactivated" : "Device activated");
+        fetchData();
+      }
+    } catch (error) {
+      toast.error("Failed to update device status");
     }
   };
 
@@ -201,7 +324,11 @@ export default function AdminEdgeDevices() {
             Refresh
           </Button>
           <Button
-            onClick={() => setShowProvisionDialog(true)}
+            onClick={() => {
+              setDeviceName("");
+              setSelectedClientId("");
+              setShowProvisionDialog(true);
+            }}
             className="bg-blue-600 hover:bg-blue-700"
             data-testid="provision-device-btn"
           >
@@ -306,6 +433,11 @@ export default function AdminEdgeDevices() {
                             >
                               {device.is_online ? 'Online' : 'Offline'}
                             </Badge>
+                            {device.is_active === false && (
+                              <Badge variant="outline" className="bg-red-500/10 text-red-500 border-red-500/30">
+                                Disabled
+                              </Badge>
+                            )}
                           </div>
                           <p className="text-sm text-muted-foreground mt-1">
                             Client: {device.client_name || device.client_id}
@@ -316,11 +448,48 @@ export default function AdminEdgeDevices() {
                         </div>
                       </div>
                       
-                      <div className="text-right text-sm">
-                        <div className="flex items-center gap-1 text-muted-foreground">
-                          <Clock className="w-3 h-3" />
-                          <span>Last seen: {formatLastSeen(device.last_heartbeat)}</span>
+                      <div className="flex items-center gap-2">
+                        <div className="text-right text-sm mr-4">
+                          <div className="flex items-center gap-1 text-muted-foreground">
+                            <Clock className="w-3 h-3" />
+                            <span>Last seen: {formatLastSeen(device.last_heartbeat)}</span>
+                          </div>
                         </div>
+                        
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                              <MoreHorizontal className="w-4 h-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => handleEditDevice(device)}>
+                              <Pencil className="w-4 h-4 mr-2" />
+                              Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onClick={() => handleToggleActive(device)}>
+                              {device.is_active !== false ? (
+                                <>
+                                  <PowerOff className="w-4 h-4 mr-2 text-amber-500" />
+                                  <span className="text-amber-500">Deactivate</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Power className="w-4 h-4 mr-2 text-emerald-500" />
+                                  <span className="text-emerald-500">Activate</span>
+                                </>
+                              )}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem 
+                              onClick={() => handleDeleteClick(device)}
+                              className="text-red-500"
+                            >
+                              <Trash2 className="w-4 h-4 mr-2" />
+                              Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </div>
                     
@@ -555,6 +724,89 @@ HEARTBEAT_INTERVAL_SECONDS=60`;
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Edit Dialog */}
+      <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle style={{ fontFamily: 'Rajdhani, sans-serif' }}>
+              EDIT EDGE DEVICE
+            </DialogTitle>
+            <DialogDescription>
+              Update device settings
+            </DialogDescription>
+          </DialogHeader>
+          
+          {editingDevice && (
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label>Device ID</Label>
+                <Input value={editingDevice.device_id} disabled className="font-mono text-sm" />
+              </div>
+              
+              <div className="space-y-2">
+                <Label>Device Name</Label>
+                <Input
+                  value={editingDevice.device_name}
+                  onChange={(e) => setEditingDevice({ ...editingDevice, device_name: e.target.value })}
+                  placeholder="Enter device name"
+                />
+              </div>
+              
+              <div className="flex items-center justify-between p-4 rounded-lg bg-white/[0.02] border border-white/5">
+                <div>
+                  <p className="font-medium">Active</p>
+                  <p className="text-sm text-muted-foreground">Device can connect and send data</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editingDevice.is_active}
+                    onChange={(e) => setEditingDevice({ ...editingDevice, is_active: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                </label>
+              </div>
+            </div>
+          )}
+          
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowEditDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveEdit} disabled={saving}>
+              {saving ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Edge Device?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete <strong>{deviceToDelete?.device_name || deviceToDelete?.device_id}</strong>?
+              <br /><br />
+              This action cannot be undone. The device will need to be re-provisioned to reconnect.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmDelete}
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {deleting ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+              Delete Device
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
