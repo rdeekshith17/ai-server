@@ -46,6 +46,7 @@ const adminNavItems = [
   { path: "/admin/ai-control", icon: Cpu, label: "AI Control" },
   { path: "/admin/alerts", icon: Bell, label: "Alerts" },
   { path: "/admin/analytics", icon: BarChart3, label: "Analytics" },
+  { path: "/admin/settings", icon: Settings, label: "Settings" },
 ];
 
 export default function AdminLayout() {
