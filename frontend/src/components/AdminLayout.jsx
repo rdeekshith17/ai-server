@@ -61,7 +61,10 @@ export default function AdminLayout() {
 
   const fetchSystemHealth = async () => {
     try {
-      const response = await axios.get(`${API}/admin/system/health`, { withCredentials: true });
+      const response = await axios.get(`${API}/admin/system/health`, { 
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
       setSystemHealth(response.data);
     } catch (error) {
       console.error("Failed to fetch system health:", error);
