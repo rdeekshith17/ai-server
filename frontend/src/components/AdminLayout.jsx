@@ -14,7 +14,8 @@ import {
   ChevronDown,
   Cpu,
   BarChart3,
-  Bell
+  Bell,
+  Server
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import {
@@ -29,11 +30,18 @@ import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
+// Get auth headers
+const getAuthHeaders = () => {
+  const token = localStorage.getItem("session_token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 const adminNavItems = [
   { path: "/admin", icon: LayoutDashboard, label: "Dashboard", end: true },
   { path: "/admin/clients", icon: Building2, label: "Clients" },
   { path: "/admin/users", icon: Users, label: "Users" },
   { path: "/admin/cameras", icon: Camera, label: "Cameras" },
+  { path: "/admin/edge-devices", icon: Server, label: "Edge Devices" },
   { path: "/admin/incidents", icon: AlertTriangle, label: "Incidents" },
   { path: "/admin/ai-control", icon: Cpu, label: "AI Control" },
   { path: "/admin/alerts", icon: Bell, label: "Alerts" },
