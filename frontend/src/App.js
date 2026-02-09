@@ -16,6 +16,7 @@ import AdminCameras from "./pages/admin/AdminCameras";
 import AdminUsers from "./pages/admin/AdminUsers";
 import AdminAIControl from "./pages/admin/AdminAIControl";
 import AdminAlerts from "./pages/admin/AdminAlerts";
+import AdminEdgeDevices from "./pages/admin/AdminEdgeDevices";
 import { Toaster } from "./components/ui/sonner";
 import { AuthProvider, ProtectedRoute } from "./context/AuthContext";
 
