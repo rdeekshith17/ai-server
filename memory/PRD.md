@@ -12,11 +12,12 @@ Build a shoplifting detection system for liquor stores, convenience stores and g
 - Multi-tenant SaaS architecture with RBAC
 
 ## Architecture
+- **Central Server**: FastAPI backend for management, auth, client dashboard, incident storage
+- **Edge Device**: On-premise ML processor that connects to RTSP cameras and runs detection
 - **Frontend**: React 18, TailwindCSS, Shadcn/UI, Framer Motion, Recharts
-- **Backend**: FastAPI (Python 3.11), Motor (async MongoDB)
 - **Database**: MongoDB
-- **AI/ML**: YOLO v8, DeepFace, YOLO Pose, OpenAI GPT-5.2 Vision
-- **Auth**: Emergent-managed Google OAuth
+- **AI/ML**: YOLO v8, DeepFace, YOLO Pose, OpenAI GPT-5.2 Vision (runs on edge devices)
+- **Auth**: Emergent-managed Google OAuth + Email/Password
 - **Alerts**: Twilio WhatsApp API (configurable per client)
 
 ## User Personas & Roles
@@ -43,141 +44,129 @@ Build a shoplifting detection system for liquor stores, convenience stores and g
 
 ### Phase 2: Multi-Tenant Foundation ✅ (January 2026)
 - [x] Emergent Google OAuth authentication
+- [x] Email/Password authentication
 - [x] Role-Based Access Control (RBAC)
 - [x] Admin Dashboard with platform stats
 - [x] Client Management (CRUD)
 - [x] Protected Routes (auth-gated)
 - [x] User Profile & Navigation
 
-### Phase 3: Admin Features ✅ (January 2026)
-- [x] Camera Management UI
-  - Add/edit/delete cameras
-  - RTSP URL configuration
-  - Detection sensitivity settings
-  - Online/offline status
-- [x] User Management UI
-  - Assign users to clients
-  - Update user roles
-  - Filter by role/client
-- [x] AI Model Control UI
-  - Enable/disable models per client
-  - YOLO, DeepFace, Pose, GPT toggles
-  - Detection sensitivity slider
-  - Threat threshold configuration
-- [x] WhatsApp Alert Settings
-  - Enable/disable alerts per client
-  - Configure trigger rules (critical/warning)
-  - Add/remove recipient numbers
-  - Quiet hours configuration
-  - Cooldown period setting
-  - Test alert functionality
-  - Alert history log
+### Phase 3: Central/Edge Architecture ✅ (February 2026)
+- [x] Central Server (lightweight API, no ML)
+- [x] Edge Device framework with RTSP camera support
+- [x] Edge config API: `/api/edge/config/{client_id}` - Returns cameras with RTSP URLs
+- [x] Edge registration: `/api/edge/register`
+- [x] Edge heartbeat: `/api/edge/heartbeat`
+- [x] Incident upload from edge: `/api/edge/incidents`
+- [x] Camera Management with RTSP URL field
+- [x] AI Model Control per client
+
+### Phase 4: Settings & Configuration ✅ (February 10, 2026)
+- [x] Admin Profile Settings - save to API
+- [x] Admin System Settings - maintenance mode, registrations, email verification
+- [x] Admin Notification Settings - per-admin preferences
+- [x] Client Detection Settings - sensitivity, pose, face, GPT analysis
+- [x] Client Alert Settings - email, WhatsApp notifications
+- [x] Twilio WhatsApp integration (backend ready, UI done)
 
 ---
 
-## Key Files Created
-
-### Backend
-- `/app/backend/routes/auth.py` - Authentication service
-- `/app/backend/routes/admin.py` - Admin management routes
-- `/app/backend/routes/alerts.py` - WhatsApp alert service
-
-### Frontend
-- `/app/frontend/src/pages/Login.jsx` - Google OAuth login
-- `/app/frontend/src/pages/AuthCallback.jsx` - OAuth callback
-- `/app/frontend/src/context/AuthContext.jsx` - Auth state
-- `/app/frontend/src/components/AdminLayout.jsx` - Admin sidebar
-- `/app/frontend/src/pages/admin/AdminDashboard.jsx`
-- `/app/frontend/src/pages/admin/AdminClients.jsx`
-- `/app/frontend/src/pages/admin/AdminCameras.jsx`
-- `/app/frontend/src/pages/admin/AdminUsers.jsx`
-- `/app/frontend/src/pages/admin/AdminAIControl.jsx`
-- `/app/frontend/src/pages/admin/AdminAlerts.jsx`
-
-### Documentation
-- `/app/docs/DEVELOPER_GUIDE.md` - Complete developer guide
-- `/app/docs/MULTI_TENANT_ARCHITECTURE.md` - Architecture design
-
----
-
-## API Endpoints
+## Key API Endpoints
 
 ### Authentication
-- `POST /api/auth/session` - Exchange OAuth session
+- `POST /api/auth/register` - Create new user
+- `POST /api/auth/login` - Email/password login
+- `POST /api/auth/session` - Google OAuth callback
 - `GET /api/auth/me` - Get current user
 - `POST /api/auth/logout` - Logout
 
-### Admin
-- `GET /api/admin/dashboard/stats` - Platform stats
-- `GET /api/admin/system/health` - System health
-- `GET/POST /api/admin/clients` - Client CRUD
-- `GET/POST /api/admin/cameras` - Camera CRUD
-- `GET /api/admin/users` - User management
-- `GET/PUT /api/admin/ai/settings` - AI settings
+### Settings (NEW)
+- `PUT /api/users/{user_id}/profile` - Update user profile
+- `GET /api/admin/system/settings` - Get system settings
+- `PUT /api/admin/system/settings` - Update system settings
+- `GET /api/admin/notifications/settings` - Get admin notification prefs
+- `PUT /api/admin/notifications/settings` - Update admin notification prefs
+- `GET /api/client/detection-settings/{client_id}` - Get detection settings
+- `PUT /api/client/detection-settings/{client_id}` - Update detection settings
+- `GET /api/alerts/settings/{client_id}` - Get alert settings
+- `PUT /api/alerts/settings/{client_id}` - Update alert settings
 
-### Alerts
-- `GET/PUT /api/alerts/settings/{client_id}` - Alert config
-- `POST /api/alerts/test` - Send test alert
-- `GET /api/alerts/log/{client_id}` - Alert history
-- `GET /api/alerts/status` - Twilio status
+### Edge Device
+- `GET /api/edge/config/{client_id}` - Get full config including cameras with RTSP URLs
+- `POST /api/edge/register` - Register edge device
+- `POST /api/edge/heartbeat` - Send health data
+- `POST /api/edge/incidents` - Upload detected incidents
+
+### Admin
+- `GET /api/admin/dashboard/stats` - Dashboard statistics
+- `GET /api/admin/clients` - List clients
+- `POST /api/admin/clients` - Create client
+- `GET /api/admin/cameras` - List cameras
+- `POST /api/admin/cameras` - Create camera with RTSP URL
+- `PUT /api/admin/ai/settings` - Update AI settings per client
+
+---
+
+## Test Credentials
+- **Admin**: test@admin.com / test123 (super_admin)
+- **Test Client**: cli_778fc2f73915 (Test Store - professional plan)
+- **Edge API Key**: sg_edge_yd4x6l4mnru-Zo9Z5Q634whLw7Y4yhDAalhGA5NyF3Y
 
 ---
 
 ## Prioritized Backlog
 
-### P0 - Completed ✅
-- ~~Camera Management UI~~
-- ~~User Management UI~~
-- ~~AI Model Control UI~~
-- ~~WhatsApp Alerts~~
+### P0 - Critical
+- [ ] Test edge device RTSP connection to real cameras
 
-### P1 (High Priority) - Next
-- [ ] Tenant-aware data filtering (add client_id to video/incident endpoints)
-- [ ] Real RTSP stream ingestion (replace video simulation)
-- [ ] WebSocket for real-time detection updates
+### P1 - High Priority
+- [ ] Refactor `server.py` (2000+ lines) into modules (routes/, models/, services/)
+- [ ] Code cleanup: Remove deprecated `/app/backend.old` files
+- [ ] Frontend lint warnings fix (useEffect dependencies)
 
-### P2 (Medium Priority)
-- [ ] Billing integration (Stripe)
-- [ ] Client self-service portal
-- [ ] Video playback with timestamp jumping
-- [ ] Export incidents report (PDF/CSV)
-- [ ] Client onboarding wizard
+### P2 - Medium Priority
+- [ ] ML model fine-tuning controls on client dashboard
+- [ ] Email integration for alerts (SendGrid/Resend)
+- [ ] Billing/subscription management
+- [ ] Incident video clip storage
 
-### P3 (Low Priority)
+### P3 - Future
+- [ ] Mobile app notifications
 - [ ] Custom branding per client
-- [ ] Mobile app
-- [ ] Advanced analytics per client
-- [ ] Webhook integrations
+- [ ] API rate limiting
+- [ ] Audit logs
 
 ---
 
-## Environment Variables
-
-### Backend (.env)
-```env
-MONGO_URL=mongodb://...
-DB_NAME=test_database
-EMERGENT_API_KEY=your_key
-
-# Optional - WhatsApp Alerts
-TWILIO_ACCOUNT_SID=ACxxxxxx
-TWILIO_AUTH_TOKEN=xxx
-TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+## Files Structure
 ```
-
-### Frontend (.env)
-```env
-REACT_APP_BACKEND_URL=https://your-domain.com
+/app/
+├── backend/           # Central server (copies from central-server)
+│   ├── server.py      # Monolithic API (to be refactored)
+│   ├── tests/         # Pytest tests
+│   └── requirements.txt
+├── central-server/    # Original central server code
+├── edge-device/       # On-premise ML processor
+│   ├── edge_processor.py
+│   └── requirements.txt
+├── frontend/          # React app
+│   └── src/
+│       ├── pages/
+│       │   ├── admin/  # Admin pages
+│       │   └── Settings.jsx  # Client settings
+│       └── context/
+└── docs/              # Documentation & presentations
 ```
 
 ---
 
-## Testing Credentials
-- First user to sign in via Google OAuth becomes Super Admin
-- Create test users via MongoDB for testing
+## Change Log
 
-## Technical Notes
-- Memory usage is high due to ML models - monitor carefully
-- Video files stored in `/app/backend/video_storage/`
-- All API responses exclude MongoDB `_id` field
-- Session tokens expire after 7 days
+### February 10, 2026
+- Fixed all settings save buttons (Profile, Detection, Alerts, System, Notifications)
+- Added `/api/edge/config/{client_id}` endpoint for edge devices to fetch cameras with RTSP URLs
+- Added `/api/users/{user_id}/profile` endpoint
+- Added `/api/admin/system/settings` and `/api/admin/notifications/settings` endpoints
+- Added `/api/client/detection-settings/{client_id}` endpoint
+- All 21 backend API tests passed
+- All frontend save buttons verified working
