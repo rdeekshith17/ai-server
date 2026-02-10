@@ -1,2043 +1,2468 @@
-from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Form, Request
-from fastapi.responses import JSONResponse
-from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
+"""
+SecureGuard Central Server
+Lightweight API for multi-tenant SaaS (No ML Models)
+
+This server handles:
+- Admin dashboard & authentication
+- Client/user management
+- Edge device registration & provisioning
+- Incident storage from edge devices
+- WhatsApp alert notifications (Twilio)
+- Billing & subscriptions
+- Static frontend serving
+
+ML processing happens on Edge Devices at client locations.
+"""
+
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, EmailStr
+from typing import Optional, List, Dict, Any
+from datetime import datetime, timezone, timedelta
+from contextlib import asynccontextmanager
+from dotenv import load_dotenv
 import os
-import logging
-from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Dict, Any
 import uuid
-from datetime import datetime, timezone
-import base64
-import cv2
-import tempfile
-import asyncio
-import numpy as np
-from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+import hashlib
+import secrets
+import logging
+import httpx
+from pathlib import Path
 
-# Import auth and admin routes
-from routes import create_auth_routes, create_admin_routes, create_alerts_routes, get_current_user, require_auth, UserRole
+# Twilio for WhatsApp
+try:
+    from twilio.rest import Client as TwilioClient
+    TWILIO_AVAILABLE = True
+except ImportError:
+    TWILIO_AVAILABLE = False
+    logger.warning("Twilio not installed. WhatsApp alerts will be disabled.")
 
-# ML Model imports
-from ultralytics import YOLO
-import warnings
-warnings.filterwarnings('ignore')
+load_dotenv()
 
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
-
-# MongoDB connection
-mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ.get('DB_NAME', 'test_database')]
-
-# LLM Key
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
-
-# ============================================
-# ML MODELS INITIALIZATION
-# ============================================
-# YOLO model for person detection and tracking
-yolo_model = None
-yolo_pose_model = None
-deepface_initialized = False
-
-# Live feed state management
-live_feeds = {}  # Store active camera feeds
-
-def get_yolo_model():
-    """Lazy load YOLO model"""
-    global yolo_model
-    if yolo_model is None:
-        try:
-            yolo_model = YOLO('yolov8n.pt')  # Nano model for speed
-            logger.info("YOLO model loaded successfully")
-        except Exception as e:
-            logger.error(f"Failed to load YOLO model: {e}")
-    return yolo_model
-
-def get_yolo_pose_model():
-    """Lazy load YOLO pose model for skeleton detection"""
-    global yolo_pose_model
-    if yolo_pose_model is None:
-        try:
-            yolo_pose_model = YOLO('yolov8n-pose.pt')  # Pose estimation model
-            logger.info("YOLO Pose model loaded successfully")
-        except Exception as e:
-            logger.error(f"Failed to load YOLO Pose model: {e}")
-    return yolo_pose_model
-
-def init_deepface():
-    """Initialize DeepFace for face recognition"""
-    global deepface_initialized
-    if not deepface_initialized:
-        try:
-            # Import here to avoid loading at startup
-            from deepface import DeepFace
-            deepface_initialized = True
-            logger.info("DeepFace initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize DeepFace: {e}")
-    return deepface_initialized
-
-# ============================================
-# DECISION ENGINE
-# ============================================
-class DecisionEngine:
-    """AI Decision Engine for threat assessment"""
-    
-    ACTIVITY_THRESHOLDS = {
-        "item_in_pocket": 0.7,
-        "concealment": 0.6,
-        "loitering": 0.5,
-        "exit_movement": 0.6,
-        "staff_theft": 0.7
-    }
-    
-    THREAT_LEVELS = {
-        "critical": 0.8,
-        "warning": 0.5,
-        "safe": 0.0
-    }
-    
-    @staticmethod
-    def analyze_pose(keypoints: List, bbox: List) -> Dict:
-        """Analyze pose keypoints for suspicious behavior"""
-        activities = []
-        confidence_scores = {}
-        
-        if not keypoints or len(keypoints) < 17:
-            return {"activities": [], "scores": {}, "threat_level": "safe"}
-        
-        # Keypoint indices (COCO format):
-        # 0: nose, 5-6: shoulders, 7-8: elbows, 9-10: wrists
-        # 11-12: hips, 13-14: knees, 15-16: ankles
-        
-        try:
-            # Extract key body parts
-            left_wrist = keypoints[9] if len(keypoints) > 9 else None
-            right_wrist = keypoints[10] if len(keypoints) > 10 else None
-            left_hip = keypoints[11] if len(keypoints) > 11 else None
-            right_hip = keypoints[12] if len(keypoints) > 12 else None
-            left_shoulder = keypoints[5] if len(keypoints) > 5 else None
-            right_shoulder = keypoints[6] if len(keypoints) > 6 else None
-            
-            # Check for hands near pocket area (item in pocket detection)
-            if left_wrist and left_hip:
-                dist_left = abs(left_wrist[1] - left_hip[1])
-                if dist_left < 50:  # Close to hip
-                    activities.append("item_in_pocket")
-                    confidence_scores["item_in_pocket"] = min(0.85 + (50 - dist_left) / 100, 0.95)
-            
-            if right_wrist and right_hip:
-                dist_right = abs(right_wrist[1] - right_hip[1])
-                if dist_right < 50:
-                    if "item_in_pocket" not in activities:
-                        activities.append("item_in_pocket")
-                        confidence_scores["item_in_pocket"] = min(0.85 + (50 - dist_right) / 100, 0.95)
-                    else:
-                        confidence_scores["item_in_pocket"] = min(confidence_scores["item_in_pocket"] + 0.1, 0.98)
-            
-            # Check for concealment behavior (hands near torso)
-            if left_wrist and right_wrist and left_shoulder and right_shoulder:
-                torso_center_y = (left_shoulder[1] + right_shoulder[1]) / 2
-                if abs(left_wrist[1] - torso_center_y) < 80 or abs(right_wrist[1] - torso_center_y) < 80:
-                    activities.append("concealment_posture")
-                    confidence_scores["concealment_posture"] = 0.75
-            
-            # Determine standing vs walking based on leg positions
-            left_knee = keypoints[13] if len(keypoints) > 13 else None
-            right_knee = keypoints[14] if len(keypoints) > 14 else None
-            
-            if left_knee and right_knee:
-                knee_diff = abs(left_knee[0] - right_knee[0])
-                if knee_diff > 30:
-                    activities.append("walking")
-                    confidence_scores["walking"] = min(0.7 + knee_diff / 200, 0.95)
-                else:
-                    activities.append("standing")
-                    confidence_scores["standing"] = 0.8
-            
-        except Exception as e:
-            logger.error(f"Pose analysis error: {e}")
-        
-        # Calculate threat level
-        threat_score = 0.0
-        if "item_in_pocket" in activities:
-            threat_score += confidence_scores.get("item_in_pocket", 0) * 0.5
-        if "concealment_posture" in activities:
-            threat_score += confidence_scores.get("concealment_posture", 0) * 0.3
-        
-        threat_level = "safe"
-        if threat_score >= DecisionEngine.THREAT_LEVELS["critical"]:
-            threat_level = "critical"
-        elif threat_score >= DecisionEngine.THREAT_LEVELS["warning"]:
-            threat_level = "warning"
-        
-        return {
-            "activities": activities,
-            "scores": confidence_scores,
-            "threat_level": threat_level,
-            "threat_score": round(threat_score, 2)
-        }
-    
-    @staticmethod
-    def classify_overall_behavior(detections: List[Dict]) -> Dict:
-        """Classify overall scene behavior"""
-        total_persons = len(detections)
-        suspicious_count = 0
-        activities_summary = {}
-        
-        for det in detections:
-            if det.get("threat_level") in ["critical", "warning"]:
-                suspicious_count += 1
-            for activity in det.get("activities", []):
-                activities_summary[activity] = activities_summary.get(activity, 0) + 1
-        
-        scene_status = "normal"
-        if suspicious_count > 0:
-            scene_status = "alert"
-        if suspicious_count >= 2 or any(d.get("threat_level") == "critical" for d in detections):
-            scene_status = "critical"
-        
-        return {
-            "total_persons": total_persons,
-            "suspicious_count": suspicious_count,
-            "scene_status": scene_status,
-            "activities_summary": activities_summary
-        }
-
-decision_engine = DecisionEngine()
-
-# Create the main app without a prefix
-app = FastAPI()
-
-# Create a router with the /api prefix
-api_router = APIRouter(prefix="/api")
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+# MongoDB
+MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+DB_NAME = os.environ.get("DB_NAME", "secureguard_central")
+mongo_client: AsyncIOMotorClient = None
+db = None
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+# Constants
+SESSION_EXPIRY_DAYS = 7
+EMERGENT_AUTH_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
 
-class Incident(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    video_id: str
-    video_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    severity: str  # critical, warning, safe
-    description: str
-    confidence: float
-    frame_index: int
-    thumbnail_base64: Optional[str] = None
-    behaviors_detected: List[str] = []
-    location: str = "Unknown"
-    store_type: str = "convenience"
-
-class VideoAnalysis(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    filename: str
-    uploaded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    status: str = "pending"  # pending, processing, completed, failed
-    total_frames: int = 0
-    analyzed_frames: int = 0
-    incidents_count: int = 0
-    duration_seconds: float = 0
-    store_type: str = "convenience"
-
-class AnalyticsData(BaseModel):
-    total_videos: int = 0
-    total_incidents: int = 0
-    critical_alerts: int = 0
-    warnings: int = 0
-    safe_analyses: int = 0
-    average_confidence: float = 0.0
-    incidents_by_hour: dict = {}
-    incidents_by_type: dict = {}
-
-class WatchlistPerson(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    name: str
-    alias: Optional[str] = None
-    description: Optional[str] = None
-    photo_base64: str
-    threat_level: str = "high"  # high, medium, low
-    added_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    last_seen: Optional[datetime] = None
-    notes: Optional[str] = None
-    is_active: bool = True
-
-class CameraFeed(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    name: str
-    source: str  # RTSP URL, video file path, or "webcam"
-    location: str = "Main Floor"
-    store_type: str = "convenience"
-    is_active: bool = True
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-# ============================================
-# LIVE FEED PROCESSING FUNCTIONS
-# ============================================
-
-def process_frame_with_detection(frame: np.ndarray, draw_overlay: bool = True) -> Dict[str, Any]:
-    """
-    Process a single frame with YOLO detection and pose estimation.
-    Returns detection results and optionally the annotated frame.
-    """
-    results = {
-        "detections": [],
-        "frame_annotated": None,
-        "scene_analysis": {},
-        "timestamp": datetime.now(timezone.utc).isoformat()
+# Plan configurations
+PLANS = {
+    "trial": {
+        "name": "Trial",
+        "max_cameras": 2,
+        "max_users": 1,
+        "max_watchlist": 5,
+        "retention_days": 3,
+        "features": ["live_detection", "basic_analytics"],
+        "price_cents": 0,
+        "duration_days": 14,
+        "gpt_analysis": False
+    },
+    "starter": {
+        "name": "Starter",
+        "max_cameras": 4,
+        "max_users": 2,
+        "max_watchlist": 10,
+        "retention_days": 7,
+        "features": ["live_detection", "watchlist", "basic_analytics"],
+        "price_cents": 9900,
+        "gpt_analysis": False
+    },
+    "professional": {
+        "name": "Professional",
+        "max_cameras": 16,
+        "max_users": 5,
+        "max_watchlist": 100,
+        "retention_days": 30,
+        "features": ["live_detection", "watchlist", "advanced_analytics", "api_access", "gpt_analysis"],
+        "price_cents": 29900,
+        "gpt_analysis": True
+    },
+    "enterprise": {
+        "name": "Enterprise",
+        "max_cameras": 64,
+        "max_users": -1,
+        "max_watchlist": -1,
+        "retention_days": 90,
+        "features": ["live_detection", "watchlist", "advanced_analytics", "api_access", "gpt_analysis", "custom_branding"],
+        "price_cents": 79900,
+        "gpt_analysis": True
     }
-    
-    try:
-        # Get YOLO models
-        detection_model = get_yolo_model()
-        pose_model = get_yolo_pose_model()
-        
-        annotated_frame = frame.copy() if draw_overlay else None
-        height, width = frame.shape[:2]
-        
-        # Run person detection
-        if detection_model:
-            det_results = detection_model(frame, verbose=False, classes=[0])  # class 0 = person
-            
-            for det_result in det_results:
-                boxes = det_result.boxes
-                for i, box in enumerate(boxes):
-                    x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
-                    confidence = float(box.conf[0])
-                    
-                    if confidence < 0.5:
-                        continue
-                    
-                    detection = {
-                        "id": i,
-                        "bbox": [x1, y1, x2, y2],
-                        "confidence": round(confidence, 2),
-                        "activities": [],
-                        "activity_scores": {},
-                        "threat_level": "safe",
-                        "keypoints": []
-                    }
-                    
-                    # Determine position
-                    center_x = (x1 + x2) / 2
-                    if center_x < width * 0.25:
-                        detection["position"] = "left_edge"
-                    elif center_x > width * 0.75:
-                        detection["position"] = "right_edge"
-                    else:
-                        detection["position"] = "center"
-                    
-                    results["detections"].append(detection)
-        
-        # Run pose estimation
-        if pose_model and results["detections"]:
-            pose_results = pose_model(frame, verbose=False)
-            
-            for pose_result in pose_results:
-                if hasattr(pose_result, 'keypoints') and pose_result.keypoints is not None:
-                    keypoints_data = pose_result.keypoints.data
-                    
-                    for idx, kpts in enumerate(keypoints_data):
-                        if idx < len(results["detections"]):
-                            kpts_list = kpts.cpu().numpy().tolist()
-                            results["detections"][idx]["keypoints"] = kpts_list
-                            
-                            # Analyze pose with decision engine
-                            pose_analysis = decision_engine.analyze_pose(
-                                kpts_list, 
-                                results["detections"][idx]["bbox"]
-                            )
-                            results["detections"][idx].update({
-                                "activities": pose_analysis["activities"],
-                                "activity_scores": pose_analysis["scores"],
-                                "threat_level": pose_analysis["threat_level"],
-                                "threat_score": pose_analysis.get("threat_score", 0)
-                            })
-        
-        # Draw overlays if requested
-        if draw_overlay and annotated_frame is not None:
-            annotated_frame = draw_detection_overlay(annotated_frame, results["detections"])
-            
-            # Encode annotated frame
-            _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-            results["frame_annotated"] = base64.b64encode(buffer).decode('utf-8')
-        
-        # Scene-level analysis
-        results["scene_analysis"] = decision_engine.classify_overall_behavior(results["detections"])
-        
-    except Exception as e:
-        logger.error(f"Frame processing error: {e}")
-        results["error"] = str(e)
-    
-    return results
-
-def draw_detection_overlay(frame: np.ndarray, detections: List[Dict]) -> np.ndarray:
-    """Draw bounding boxes, pose skeleton, and activity labels on frame"""
-    
-    # Colors (BGR)
-    COLORS = {
-        "safe": (0, 255, 0),      # Green
-        "warning": (0, 165, 255),  # Orange
-        "critical": (0, 0, 255),   # Red
-        "skeleton": (255, 0, 255), # Magenta
-        "label_bg": (40, 40, 40)   # Dark gray
-    }
-    
-    SKELETON_CONNECTIONS = [
-        (0, 1), (0, 2), (1, 3), (2, 4),  # Head
-        (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),  # Arms
-        (5, 11), (6, 12), (11, 12),  # Torso
-        (11, 13), (13, 15), (12, 14), (14, 16)  # Legs
-    ]
-    
-    KEYPOINT_COLORS = [
-        (255, 0, 128),   # Nose - Pink
-        (255, 0, 128),   # Left Eye
-        (255, 0, 128),   # Right Eye
-        (255, 0, 128),   # Left Ear
-        (255, 0, 128),   # Right Ear
-        (255, 128, 0),   # Left Shoulder - Orange
-        (255, 128, 0),   # Right Shoulder
-        (0, 255, 128),   # Left Elbow - Green
-        (0, 255, 128),   # Right Elbow
-        (0, 255, 255),   # Left Wrist - Yellow
-        (0, 255, 255),   # Right Wrist
-        (255, 0, 0),     # Left Hip - Blue
-        (255, 0, 0),     # Right Hip
-        (128, 0, 255),   # Left Knee - Purple
-        (128, 0, 255),   # Right Knee
-        (255, 255, 0),   # Left Ankle - Cyan
-        (255, 255, 0)    # Right Ankle
-    ]
-    
-    for det in detections:
-        x1, y1, x2, y2 = det["bbox"]
-        threat_level = det.get("threat_level", "safe")
-        box_color = COLORS.get(threat_level, COLORS["safe"])
-        
-        # Draw bounding box
-        cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
-        
-        # Draw pose skeleton
-        keypoints = det.get("keypoints", [])
-        if keypoints and len(keypoints) >= 17:
-            # Draw keypoints
-            for i, kpt in enumerate(keypoints[:17]):
-                if len(kpt) >= 2:
-                    px, py = int(kpt[0]), int(kpt[1])
-                    conf = kpt[2] if len(kpt) > 2 else 1.0
-                    if conf > 0.3 and px > 0 and py > 0:
-                        color = KEYPOINT_COLORS[i] if i < len(KEYPOINT_COLORS) else (255, 255, 255)
-                        cv2.circle(frame, (px, py), 4, color, -1)
-            
-            # Draw skeleton connections
-            for conn in SKELETON_CONNECTIONS:
-                if conn[0] < len(keypoints) and conn[1] < len(keypoints):
-                    pt1 = keypoints[conn[0]]
-                    pt2 = keypoints[conn[1]]
-                    if len(pt1) >= 2 and len(pt2) >= 2:
-                        x1_k, y1_k = int(pt1[0]), int(pt1[1])
-                        x2_k, y2_k = int(pt2[0]), int(pt2[1])
-                        conf1 = pt1[2] if len(pt1) > 2 else 1.0
-                        conf2 = pt2[2] if len(pt2) > 2 else 1.0
-                        if conf1 > 0.3 and conf2 > 0.3 and x1_k > 0 and y1_k > 0 and x2_k > 0 and y2_k > 0:
-                            cv2.line(frame, (x1_k, y1_k), (x2_k, y2_k), COLORS["skeleton"], 2)
-        
-        # Draw activity labels
-        label_y = y1 - 10
-        activities = det.get("activities", [])
-        scores = det.get("activity_scores", {})
-        
-        for activity in activities:
-            score = scores.get(activity, 0)
-            label = f"{activity.replace('_', ' ').title()}: {score*100:.1f}%"
-            
-            # Determine label color based on activity
-            if activity in ["item_in_pocket", "concealment_posture"]:
-                label_color = COLORS["critical"]
-            elif activity == "walking":
-                label_color = (255, 200, 0)  # Blue-ish
-            else:
-                label_color = COLORS["safe"]
-            
-            # Draw label background
-            (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.rectangle(frame, (x1, label_y - text_h - 5), (x1 + text_w + 10, label_y + 5), label_color, -1)
-            cv2.putText(frame, label, (x1 + 5, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            label_y -= (text_h + 12)
-        
-        # Draw threat indicator
-        if threat_level != "safe":
-            threat_label = f"THREAT: {threat_level.upper()}"
-            cv2.putText(frame, threat_label, (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
-    
-    # Draw scene status
-    return frame
-
-# ============================================
-# ML DETECTION FUNCTIONS
-# ============================================
-
-def detect_persons_yolo(frame: np.ndarray) -> Dict[str, Any]:
-    """
-    Use YOLO to detect persons in frame
-    Returns: dict with person count, bounding boxes, and tracking info
-    """
-    try:
-        model = get_yolo_model()
-        if model is None:
-            return {"persons": [], "count": 0, "error": "YOLO model not loaded"}
-        
-        # Run inference
-        results = model(frame, verbose=False, classes=[0])  # class 0 = person
-        
-        persons = []
-        for result in results:
-            boxes = result.boxes
-            for box in boxes:
-                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                confidence = float(box.conf[0])
-                
-                # Calculate center and size
-                center_x = (x1 + x2) / 2
-                center_y = (y1 + y2) / 2
-                width = x2 - x1
-                height = y2 - y1
-                
-                # Determine position in frame
-                frame_h, frame_w = frame.shape[:2]
-                position = "center"
-                if center_x < frame_w * 0.33:
-                    position = "left"
-                elif center_x > frame_w * 0.66:
-                    position = "right"
-                
-                # Calculate area ratio - convert numpy types to Python native
-                area_ratio = float((width * height) / (frame_w * frame_h))
-                
-                persons.append({
-                    "bbox": [int(x1), int(y1), int(x2), int(y2)],
-                    "confidence": round(float(confidence), 2),
-                    "center": [int(center_x), int(center_y)],
-                    "size": [int(width), int(height)],
-                    "position": position,
-                    "area_ratio": round(area_ratio, 4)
-                })
-        
-        return {
-            "persons": persons,
-            "count": len(persons),
-            "frame_size": [int(frame.shape[1]), int(frame.shape[0])]
-        }
-    except Exception as e:
-        logger.error(f"YOLO detection error: {e}")
-        return {"persons": [], "count": 0, "error": str(e)}
-
-def detect_faces_deepface(frame: np.ndarray) -> List[Dict]:
-    """
-    Detect faces in frame using DeepFace
-    Returns: list of detected faces with embeddings
-    """
-    try:
-        from deepface import DeepFace
-        
-        # Detect faces
-        faces = DeepFace.extract_faces(
-            frame, 
-            detector_backend='opencv',
-            enforce_detection=False
-        )
-        
-        detected_faces = []
-        for face in faces:
-            if face.get('confidence', 0) > 0.5:
-                facial_area = face.get('facial_area', {})
-                detected_faces.append({
-                    "bbox": [
-                        facial_area.get('x', 0),
-                        facial_area.get('y', 0),
-                        facial_area.get('x', 0) + facial_area.get('w', 0),
-                        facial_area.get('y', 0) + facial_area.get('h', 0)
-                    ],
-                    "confidence": round(face.get('confidence', 0), 2)
-                })
-        
-        return detected_faces
-    except Exception as e:
-        logger.error(f"DeepFace detection error: {e}")
-        return []
-
-async def compare_face_with_watchlist(frame: np.ndarray, watchlist_photos: List[Dict]) -> List[Dict]:
-    """
-    Compare detected faces against watchlist using DeepFace
-    Returns: list of matches with person info and confidence
-    """
-    matches = []
-    
-    try:
-        from deepface import DeepFace
-        
-        # Save frame temporarily
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-            cv2.imwrite(tmp.name, frame)
-            frame_path = tmp.name
-        
-        for person in watchlist_photos:
-            try:
-                # Decode watchlist photo
-                photo_data = base64.b64decode(person['photo_base64'])
-                photo_array = np.frombuffer(photo_data, np.uint8)
-                watchlist_img = cv2.imdecode(photo_array, cv2.IMREAD_COLOR)
-                
-                if watchlist_img is None:
-                    continue
-                
-                # Save watchlist photo temporarily
-                with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp2:
-                    cv2.imwrite(tmp2.name, watchlist_img)
-                    watchlist_path = tmp2.name
-                
-                # Compare faces
-                result = DeepFace.verify(
-                    frame_path, 
-                    watchlist_path,
-                    model_name='VGG-Face',
-                    enforce_detection=False
-                )
-                
-                if result.get('verified', False):
-                    matches.append({
-                        "person_id": person['id'],
-                        "person_name": person['name'],
-                        "threat_level": person['threat_level'],
-                        "confidence": round(1 - result.get('distance', 1), 2),
-                        "match_type": "face_recognition"
-                    })
-                
-                # Cleanup
-                os.remove(watchlist_path)
-                
-            except Exception as e:
-                logger.debug(f"Face comparison error for {person.get('name')}: {e}")
-                continue
-        
-        # Cleanup
-        os.remove(frame_path)
-        
-    except Exception as e:
-        logger.error(f"Watchlist comparison error: {e}")
-    
-    return matches
-
-def analyze_suspicious_behavior(persons: List[Dict], frame_history: List = None) -> Dict:
-    """
-    Analyze detected persons for suspicious behavior patterns
-    Uses person positions, movements, and grouping
-    """
-    suspicious_indicators = []
-    risk_score = 0.0
-    
-    if not persons:
-        return {"indicators": [], "risk_score": 0.0, "behaviors": [], "person_count": 0}
-    
-    # Check for multiple persons (potential coordinated theft)
-    if len(persons) >= 3:
-        suspicious_indicators.append("multiple_persons_detected")
-        risk_score += 0.2
-    
-    # Check for persons near edges (potential exit preparation)
-    edge_persons = [p for p in persons if p.get('position') in ['left', 'right']]
-    if edge_persons:
-        suspicious_indicators.append("persons_near_exits")
-        risk_score += 0.15
-    
-    # Check for large person detection (close to camera - potential concealment)
-    large_persons = [p for p in persons if float(p.get('area_ratio', 0)) > 0.15]
-    if large_persons:
-        suspicious_indicators.append("close_proximity_detected")
-        risk_score += 0.1
-    
-    # Detect clustering (group activity)
-    if len(persons) >= 2:
-        centers = [p.get('center', [0, 0]) for p in persons]
-        for i, c1 in enumerate(centers):
-            for j, c2 in enumerate(centers[i+1:], i+1):
-                distance = float(np.sqrt((c1[0] - c2[0])**2 + (c1[1] - c2[1])**2))
-                if distance < 150:  # Close together
-                    suspicious_indicators.append("group_clustering")
-                    risk_score += 0.15
-                    break
-    
-    behaviors = []
-    if "multiple_persons_detected" in suspicious_indicators:
-        behaviors.append("Coordinated group activity possible")
-    if "persons_near_exits" in suspicious_indicators:
-        behaviors.append("Persons positioned near exits")
-    if "close_proximity_detected" in suspicious_indicators:
-        behaviors.append("Close proximity to camera/merchandise")
-    if "group_clustering" in suspicious_indicators:
-        behaviors.append("Group clustering detected")
-    
-    return {
-        "indicators": suspicious_indicators,
-        "risk_score": float(min(risk_score, 1.0)),
-        "behaviors": behaviors,
-        "person_count": len(persons)
-    }
-
-# Helper functions
-def extract_frames_from_video(video_path: str, max_frames: int = 10) -> List[tuple]:
-    """Extract frames from video at regular intervals"""
-    frames = []
-    cap = cv2.VideoCapture(video_path)
-    
-    if not cap.isOpened():
-        logger.error(f"Failed to open video: {video_path}")
-        return frames
-    
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    duration = total_frames / fps if fps > 0 else 0
-    
-    # Calculate frame interval
-    interval = max(1, total_frames // max_frames)
-    
-    frame_idx = 0
-    extracted_count = 0
-    
-    while cap.isOpened() and extracted_count < max_frames:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        if frame_idx % interval == 0:
-            # Resize frame for faster processing
-            frame = cv2.resize(frame, (640, 480))
-            # Convert to base64
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            frame_base64 = base64.b64encode(buffer).decode('utf-8')
-            frames.append((frame_idx, frame_base64, frame_idx / fps if fps > 0 else 0))
-            extracted_count += 1
-        
-        frame_idx += 1
-    
-    cap.release()
-    return frames, total_frames, duration
-
-async def analyze_frame_comprehensive(frame_base64: str, frame_idx: int, video_name: str, check_watchlist: bool = True) -> dict:
-    """
-    Comprehensive frame analysis using:
-    1. YOLO - Person detection and tracking
-    2. DeepFace - Face recognition against watchlist
-    3. GPT-5.2 Vision - Behavior analysis
-    """
-    import json
-    
-    # Decode frame
-    frame_data = base64.b64decode(frame_base64)
-    frame_array = np.frombuffer(frame_data, np.uint8)
-    frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
-    
-    results = {
-        "frame_index": frame_idx,
-        "analysis_methods": [],
-        "is_suspicious": False,
-        "severity": "safe",
-        "confidence": 0.0,
-        "description": "",
-        "behaviors_detected": [],
-        "reasoning": "",
-        "ml_detections": {}
-    }
-    
-    # 1. YOLO Person Detection
-    try:
-        yolo_results = detect_persons_yolo(frame)
-        results["ml_detections"]["yolo"] = yolo_results
-        results["analysis_methods"].append("YOLO")
-        
-        # Analyze behavior patterns from YOLO
-        if yolo_results.get("count", 0) > 0:
-            behavior_analysis = analyze_suspicious_behavior(yolo_results.get("persons", []))
-            results["ml_detections"]["behavior_analysis"] = behavior_analysis
-            
-            if behavior_analysis.get("risk_score", 0) > 0.3:
-                results["behaviors_detected"].extend(behavior_analysis.get("behaviors", []))
-                results["confidence"] = max(results["confidence"], behavior_analysis.get("risk_score", 0))
-    except Exception as e:
-        logger.error(f"YOLO analysis error: {e}")
-        results["ml_detections"]["yolo"] = {"error": str(e)}
-    
-    # 2. DeepFace Watchlist Check
-    watchlist_matches = []
-    if check_watchlist:
-        try:
-            # Get active watchlist
-            watchlist = await db.watchlist.find(
-                {"is_active": True}, 
-                {"_id": 0, "id": 1, "name": 1, "photo_base64": 1, "threat_level": 1}
-            ).to_list(20)
-            
-            if watchlist:
-                watchlist_matches = await compare_face_with_watchlist(frame, watchlist)
-                results["ml_detections"]["face_recognition"] = {
-                    "matches": watchlist_matches,
-                    "watchlist_checked": len(watchlist)
-                }
-                results["analysis_methods"].append("DeepFace")
-                
-                if watchlist_matches:
-                    results["is_suspicious"] = True
-                    results["severity"] = "critical"
-                    results["confidence"] = max(results["confidence"], 0.9)
-                    for match in watchlist_matches:
-                        results["behaviors_detected"].append(
-                            f"WATCHLIST MATCH: {match['person_name']} ({match['threat_level']} threat)"
-                        )
-        except Exception as e:
-            logger.error(f"Face recognition error: {e}")
-            results["ml_detections"]["face_recognition"] = {"error": str(e)}
-    
-    # 3. GPT-5.2 Vision Analysis
-    try:
-        gpt_result = await analyze_frame_with_gpt(frame_base64, frame_idx, video_name)
-        results["ml_detections"]["gpt_vision"] = gpt_result
-        results["analysis_methods"].append("GPT-5.2")
-        
-        # Merge GPT results
-        if gpt_result.get("is_suspicious") or gpt_result.get("severity") in ["critical", "warning"]:
-            results["is_suspicious"] = True
-            if gpt_result.get("severity") == "critical":
-                results["severity"] = "critical"
-            elif results["severity"] != "critical":
-                results["severity"] = gpt_result.get("severity", "warning")
-        
-        results["confidence"] = max(results["confidence"], gpt_result.get("confidence", 0))
-        results["description"] = gpt_result.get("description", "")
-        results["reasoning"] = gpt_result.get("reasoning", "")
-        
-        # Add GPT detected behaviors
-        gpt_behaviors = gpt_result.get("behaviors_detected", [])
-        for behavior in gpt_behaviors:
-            if behavior not in results["behaviors_detected"]:
-                results["behaviors_detected"].append(behavior)
-                
-    except Exception as e:
-        logger.error(f"GPT analysis error: {e}")
-        results["ml_detections"]["gpt_vision"] = {"error": str(e)}
-    
-    # Final severity determination
-    if watchlist_matches:
-        results["severity"] = "critical"
-        results["description"] = f"WATCHLIST ALERT: {', '.join([m['person_name'] for m in watchlist_matches])} detected. " + results.get("description", "")
-    
-    return results
-
-async def analyze_frame_with_gpt(frame_base64: str, frame_idx: int, video_name: str) -> dict:
-    """Analyze a single frame using GPT-5.2 Vision for retail theft detection"""
-    try:
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=f"analysis-{uuid.uuid4()}",
-            system_message="""You are an advanced retail security AI specialized in detecting shoplifting, employee theft, and suspicious behavior in liquor stores, convenience stores, and gas stations.
-
-## CUSTOMER THEFT DETECTION - Look for:
-
-### Object Concealment Actions:
-1. **Bag Concealment**: Customer placing items into personal bags, backpacks, purses, shopping bags from other stores
-2. **Coat/Jacket Concealment**: Items being slipped into coat pockets, inside jacket, under coat
-3. **Body Concealment**: Items tucked into waistband, under shirt, in pants, between body and arm
-4. **Cart/Basket Switching**: Items moved to bottom of cart, hidden under other items
-
-### Specific Items to Track (High-Value Retail):
-- Liquor bottles, wine, spirits
-- Beer, energy drinks
-- Cigarettes, tobacco products, vapes
-- Chocolates, candy bars
-- Premium juices, beverages
-- Electronics, batteries
-- Cosmetics, personal care items
-- Over-the-counter medicines
-
-### Movement Patterns:
-1. **Exit Direction**: Person moving towards exit after handling merchandise
-2. **Checkout Avoidance**: Walking past registers without paying
-3. **Quick Exit**: Rushing towards door after concealment
-4. **Lookout Behavior**: Checking for staff/cameras while handling items
-
-### Coordinated Theft Indicators:
-- One person distracting staff while another conceals
-- Group blocking camera views
-- Passing items between people
-
-## EMPLOYEE/STAFF THEFT DETECTION:
-
-1. **Cash Theft**: Staff placing money in pocket, voiding transactions
-2. **Product Theft**: Employees hiding items in personal belongings
-3. **Sweethearting**: Not scanning items for friends/family
-4. **Register Manipulation**: Suspicious cash handling
-
-## RESPONSE FORMAT (JSON):
-{
-    "is_suspicious": true/false,
-    "severity": "critical" | "warning" | "safe",
-    "confidence": 0.0-1.0,
-    "description": "Detailed description of what you observe",
-    "person_description": "Physical description of suspect (clothing, appearance)",
-    "items_involved": ["list of items being handled or concealed"],
-    "concealment_method": "bag/coat/body/none",
-    "movement_towards_exit": true/false,
-    "behaviors_detected": ["specific actions observed"],
-    "staff_theft_indicators": true/false,
-    "reasoning": "Detailed explanation of why this is suspicious"
 }
 
-Be thorough but avoid false positives. Normal shopping behavior (picking up items, examining products, using shopping cart) is NOT suspicious unless combined with concealment actions."""
-        ).with_model("openai", "gpt-5.2")
 
-        image_content = ImageContent(image_base64=frame_base64)
-        
-        user_message = UserMessage(
-            text=f"Analyze this security camera frame from {video_name}. Identify any shoplifting, concealment, staff theft, or suspicious activity. Track items being handled and any movement towards exits.",
-            file_contents=[image_content]
-        )
-        
-        response = await chat.send_message(user_message)
-        
-        # Parse JSON response
-        import json
-        # Clean response - extract JSON if wrapped in markdown
-        response_text = response.strip()
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-        response_text = response_text.strip()
-        
-        result = json.loads(response_text)
-        result['frame_index'] = frame_idx
-        return result
-        
-    except Exception as e:
-        logger.error(f"Error analyzing frame {frame_idx}: {str(e)}")
-        return {
-            "is_suspicious": False,
-            "severity": "safe",
-            "confidence": 0.0,
-            "description": f"Analysis failed: {str(e)}",
-            "behaviors_detected": [],
-            "reasoning": "Error during analysis",
-            "frame_index": frame_idx
-        }
-
-# Routes
-@api_router.get("/")
-async def root():
-    return {"message": "Shoplifting Detection API v1.0"}
-
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
-
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    return status_checks
-
-@api_router.post("/videos/upload")
-async def upload_video(
-    file: UploadFile = File(...),
-    store_type: str = Form("convenience")
-):
-    """Upload a video file for analysis"""
-    try:
-        # Validate file type
-        if not file.content_type or not file.content_type.startswith('video/'):
-            raise HTTPException(status_code=400, detail="File must be a video")
-        
-        # Create video analysis record
-        video_id = str(uuid.uuid4())
-        video_doc = {
-            "id": video_id,
-            "filename": file.filename,
-            "uploaded_at": datetime.now(timezone.utc).isoformat(),
-            "status": "pending",
-            "total_frames": 0,
-            "analyzed_frames": 0,
-            "incidents_count": 0,
-            "duration_seconds": 0,
-            "store_type": store_type,
-            "content_type": file.content_type
-        }
-        
-        # Create permanent storage directory
-        video_storage_dir = ROOT_DIR / "video_storage"
-        video_storage_dir.mkdir(exist_ok=True)
-        
-        # Save file permanently (not temp)
-        video_path = video_storage_dir / f"{video_id}.mp4"
-        content = await file.read()
-        with open(video_path, 'wb') as f:
-            f.write(content)
-        
-        # Extract video info
-        cap = cv2.VideoCapture(str(video_path))
-        if cap.isOpened():
-            video_doc["total_frames"] = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            video_doc["duration_seconds"] = video_doc["total_frames"] / fps if fps > 0 else 0
-        cap.release()
-        
-        # Store permanent path for analysis and live detection
-        video_doc["video_path"] = str(video_path)
-        video_doc["temp_path"] = str(video_path)  # Keep for backward compatibility
-        
-        await db.videos.insert_one(video_doc)
-        
-        return {
-            "id": video_id,
-            "filename": file.filename,
-            "status": "pending",
-            "total_frames": video_doc["total_frames"],
-            "duration_seconds": video_doc["duration_seconds"],
-            "message": "Video uploaded successfully. Call /api/videos/analyze to start analysis."
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Upload error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@api_router.post("/videos/{video_id}/analyze")
-async def analyze_video(video_id: str, max_frames: int = 8, use_ml: bool = True):
-    """
-    Analyze an uploaded video for shoplifting behavior
-    Uses combined ML approach: YOLO + DeepFace + GPT-5.2 Vision
-    """
-    try:
-        # Get video record
-        video = await db.videos.find_one({"id": video_id}, {"_id": 0})
-        if not video:
-            raise HTTPException(status_code=404, detail="Video not found")
-        
-        if video.get("status") == "processing":
-            return {"message": "Video is already being analyzed", "status": "processing"}
-        
-        # Update status to processing
-        await db.videos.update_one(
-            {"id": video_id},
-            {"$set": {"status": "processing", "analysis_mode": "comprehensive" if use_ml else "gpt_only"}}
-        )
-        
-        tmp_path = video.get("temp_path")
-        if not tmp_path or not os.path.exists(tmp_path):
-            raise HTTPException(status_code=400, detail="Video file not found. Please re-upload.")
-        
-        # Extract frames
-        frames_data, total_frames, duration = extract_frames_from_video(tmp_path, max_frames)
-        
-        if not frames_data:
-            await db.videos.update_one(
-                {"id": video_id},
-                {"$set": {"status": "failed"}}
-            )
-            raise HTTPException(status_code=400, detail="Could not extract frames from video")
-        
-        incidents = []
-        analyzed_count = 0
-        ml_summary = {
-            "yolo_detections": 0,
-            "faces_detected": 0,
-            "watchlist_matches": 0,
-            "gpt_analyses": 0
-        }
-        
-        # Analyze each frame
-        for frame_idx, frame_base64, timestamp in frames_data:
-            # Use comprehensive analysis with all ML models
-            if use_ml:
-                result = await analyze_frame_comprehensive(
-                    frame_base64, 
-                    frame_idx, 
-                    video.get("filename", "video"),
-                    check_watchlist=True
-                )
-                
-                # Track ML usage
-                ml_detections = result.get("ml_detections", {})
-                if ml_detections.get("yolo", {}).get("count", 0) > 0:
-                    ml_summary["yolo_detections"] += ml_detections["yolo"]["count"]
-                if ml_detections.get("face_recognition", {}).get("matches"):
-                    ml_summary["watchlist_matches"] += len(ml_detections["face_recognition"]["matches"])
-                if "gpt_vision" in ml_detections:
-                    ml_summary["gpt_analyses"] += 1
-            else:
-                result = await analyze_frame_with_gpt(frame_base64, frame_idx, video.get("filename", "video"))
-                ml_summary["gpt_analyses"] += 1
-            
-            analyzed_count += 1
-            
-            # Update progress
-            await db.videos.update_one(
-                {"id": video_id},
-                {"$set": {"analyzed_frames": analyzed_count}}
-            )
-            
-            # If suspicious, create incident
-            if result.get("is_suspicious") or result.get("severity") in ["critical", "warning"]:
-                # Get GPT analysis details
-                gpt_result = result.get("ml_detections", {}).get("gpt_vision", {})
-                
-                incident = {
-                    "id": str(uuid.uuid4()),
-                    "video_id": video_id,
-                    "video_name": video.get("filename", "Unknown"),
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "severity": result.get("severity", "warning"),
-                    "description": result.get("description", "Suspicious activity detected"),
-                    "confidence": result.get("confidence", 0.5),
-                    "frame_index": frame_idx,
-                    "frame_time_seconds": timestamp,
-                    # Store full frame image for incident display
-                    "frame_image": frame_base64,
-                    "behaviors_detected": result.get("behaviors_detected", []),
-                    "reasoning": result.get("reasoning", ""),
-                    "location": "Main Floor",
-                    "store_type": video.get("store_type", "convenience"),
-                    "analysis_methods": result.get("analysis_methods", ["GPT-5.2"]),
-                    # Enhanced detection details
-                    "person_description": gpt_result.get("person_description", ""),
-                    "items_involved": gpt_result.get("items_involved", []),
-                    "concealment_method": gpt_result.get("concealment_method", "none"),
-                    "movement_towards_exit": gpt_result.get("movement_towards_exit", False),
-                    "staff_theft": gpt_result.get("staff_theft_indicators", False),
-                    # YOLO detection data
-                    "persons_detected": result.get("ml_detections", {}).get("yolo", {}).get("count", 0),
-                    "person_positions": result.get("ml_detections", {}).get("yolo", {}).get("persons", [])
-                }
-                incidents.append(incident)
-                await db.incidents.insert_one(incident)
-        
-        # Update video status
-        await db.videos.update_one(
-            {"id": video_id},
-            {
-                "$set": {
-                    "status": "completed",
-                    "analyzed_frames": analyzed_count,
-                    "incidents_count": len(incidents),
-                    "ml_summary": ml_summary
-                }
-            }
-        )
-        
-        # Keep video file for live detection - don't delete!
-        
-        return {
-            "video_id": video_id,
-            "status": "completed",
-            "frames_analyzed": analyzed_count,
-            "incidents_detected": len(incidents),
-            "ml_summary": ml_summary,
-            "analysis_methods": ["YOLO", "DeepFace", "GPT-5.2"] if use_ml else ["GPT-5.2"],
-            "incidents": [
-                {
-                    "id": i["id"],
-                    "severity": i["severity"],
-                    "description": i["description"],
-                    "confidence": i["confidence"],
-                    "behaviors": i["behaviors_detected"],
-                    "methods": i.get("analysis_methods", [])
-                } for i in incidents
-            ]
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Analysis error: {str(e)}")
-        await db.videos.update_one(
-            {"id": video_id},
-            {"$set": {"status": "failed"}}
-        )
-        raise HTTPException(status_code=500, detail=str(e))
-
-@api_router.get("/ml/status")
-async def get_ml_status():
-    """Get status of all ML models"""
-    status = {
-        "yolo": {
-            "loaded": yolo_model is not None,
-            "model": "YOLOv8n",
-            "purpose": "Person detection and tracking"
-        },
-        "yolo_pose": {
-            "loaded": yolo_pose_model is not None,
-            "model": "YOLOv8n-pose",
-            "purpose": "Pose estimation and activity detection"
-        },
-        "deepface": {
-            "initialized": deepface_initialized,
-            "model": "VGG-Face",
-            "purpose": "Face recognition for watchlist matching"
-        },
-        "gpt_vision": {
-            "available": EMERGENT_LLM_KEY is not None,
-            "model": "GPT-5.2 Vision",
-            "purpose": "Behavior analysis and scene understanding"
-        },
-        "decision_engine": {
-            "active": True,
-            "purpose": "Real-time threat assessment"
-        }
-    }
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events"""
+    global mongo_client, db
     
-    # Try to initialize models
-    if not status["yolo"]["loaded"]:
-        try:
-            get_yolo_model()
-            status["yolo"]["loaded"] = yolo_model is not None
-        except:
-            pass
+    # Startup
+    logger.info("SecureGuard Central Server starting...")
+    logger.info(f"MongoDB: {MONGO_URL}")
     
-    return status
-
-@api_router.get("/videos")
-async def get_videos():
-    """Get all uploaded videos"""
-    videos = await db.videos.find({}, {"_id": 0}).sort("uploaded_at", -1).to_list(100)
-    # Add availability flag for live detection
-    for video in videos:
-        video_path = video.get("video_path") or video.get("temp_path")
-        video["available_for_live"] = video_path and os.path.exists(video_path) if video_path else False
-        # Don't expose full paths to frontend
-        if "temp_path" in video:
-            del video["temp_path"]
-        if "video_path" in video:
-            video["has_video_file"] = True
-            del video["video_path"]
-    return {"videos": videos}
-
-@api_router.get("/videos/{video_id}")
-async def get_video(video_id: str):
-    """Get a specific video"""
-    video = await db.videos.find_one({"id": video_id}, {"_id": 0})
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
-    # Check availability
-    video_path = video.get("video_path") or video.get("temp_path")
-    video["available_for_live"] = video_path and os.path.exists(video_path) if video_path else False
-    if "temp_path" in video:
-        del video["temp_path"]
-    if "video_path" in video:
-        video["has_video_file"] = True
-        del video["video_path"]
-    return video
-
-@api_router.delete("/videos/{video_id}")
-async def delete_video(video_id: str):
-    """Delete a video and its incidents"""
-    video = await db.videos.find_one({"id": video_id})
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
+    mongo_client = AsyncIOMotorClient(MONGO_URL)
+    db = mongo_client[DB_NAME]
     
-    # Delete video file if exists
-    video_path = video.get("video_path") or video.get("temp_path")
-    if video_path and os.path.exists(video_path):
-        try:
-            os.remove(video_path)
-        except:
-            pass
+    # Create indexes
+    await db.clients.create_index("client_id", unique=True)
+    await db.users.create_index("user_id", unique=True)
+    await db.users.create_index("email", unique=True)
+    await db.edge_devices.create_index("device_id", unique=True)
+    await db.edge_devices.create_index("client_id")
+    await db.incidents.create_index([("client_id", 1), ("timestamp", -1)])
+    await db.cameras.create_index("camera_id", unique=True)
+    await db.cameras.create_index("client_id")
+    await db.user_sessions.create_index("session_token", unique=True)
+    await db.user_sessions.create_index("expires_at", expireAfterSeconds=0)
     
-    await db.videos.delete_one({"id": video_id})
-    await db.incidents.delete_many({"video_id": video_id})
+    logger.info("Central Server ready!")
     
-    return {"message": "Video and related incidents deleted"}
+    yield  # Server runs here
+    
+    # Shutdown
+    mongo_client.close()
+    logger.info("Central Server shutdown")
 
-@api_router.get("/incidents")
-async def get_incidents(
-    severity: Optional[str] = None,
-    store_type: Optional[str] = None,
-    include_image: bool = False,
-    limit: int = 50
-):
-    """Get all incidents with optional filtering"""
-    query = {}
-    if severity:
-        query["severity"] = severity
-    if store_type:
-        query["store_type"] = store_type
-    
-    # Exclude large frame_image by default for list view
-    projection = {"_id": 0}
-    if not include_image:
-        projection["frame_image"] = 0
-    
-    incidents = await db.incidents.find(query, projection).sort("timestamp", -1).to_list(limit)
-    
-    # Add has_image flag
-    for incident in incidents:
-        if not include_image:
-            incident["has_image"] = await db.incidents.count_documents(
-                {"id": incident["id"], "frame_image": {"$exists": True, "$ne": None}}
-            ) > 0
-    
-    return {"incidents": incidents, "total": len(incidents)}
 
-@api_router.get("/incidents/{incident_id}")
-async def get_incident(incident_id: str):
-    """Get a specific incident with full details including frame image"""
-    incident = await db.incidents.find_one({"id": incident_id}, {"_id": 0})
-    if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    return incident
+# App
+app = FastAPI(
+    title="SecureGuard Central Server",
+    description="Multi-tenant SaaS API for shoplifting detection",
+    version="2.0.0",
+    lifespan=lifespan
+)
 
-@api_router.get("/incidents/{incident_id}/image")
-async def get_incident_image(incident_id: str):
-    """Get just the frame image for an incident"""
-    incident = await db.incidents.find_one(
-        {"id": incident_id}, 
-        {"_id": 0, "frame_image": 1}
-    )
-    if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    
-    frame_image = incident.get("frame_image")
-    if not frame_image:
-        raise HTTPException(status_code=404, detail="No image available for this incident")
-    
-    return {"image": frame_image}
+api_router = APIRouter(prefix="/api")
 
-@api_router.delete("/incidents/{incident_id}")
-async def delete_incident(incident_id: str):
-    """Delete an incident"""
-    result = await db.incidents.delete_one({"id": incident_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    return {"message": "Incident deleted"}
-
-@api_router.get("/analytics")
-async def get_analytics():
-    """Get analytics data"""
-    try:
-        # Count totals
-        total_videos = await db.videos.count_documents({})
-        total_incidents = await db.incidents.count_documents({})
-        critical_alerts = await db.incidents.count_documents({"severity": "critical"})
-        warnings = await db.incidents.count_documents({"severity": "warning"})
-        safe_analyses = await db.videos.count_documents({"status": "completed"}) - (critical_alerts + warnings)
-        
-        # Get average confidence
-        pipeline = [
-            {"$group": {"_id": None, "avg_confidence": {"$avg": "$confidence"}}}
-        ]
-        confidence_result = await db.incidents.aggregate(pipeline).to_list(1)
-        avg_confidence = confidence_result[0]["avg_confidence"] if confidence_result else 0.0
-        
-        # Incidents by behavior type
-        behavior_pipeline = [
-            {"$unwind": "$behaviors_detected"},
-            {"$group": {"_id": "$behaviors_detected", "count": {"$sum": 1}}},
-            {"$sort": {"count": -1}}
-        ]
-        behavior_result = await db.incidents.aggregate(behavior_pipeline).to_list(10)
-        incidents_by_type = {item["_id"]: item["count"] for item in behavior_result}
-        
-        # Incidents by store type
-        store_pipeline = [
-            {"$group": {"_id": "$store_type", "count": {"$sum": 1}}}
-        ]
-        store_result = await db.incidents.aggregate(store_pipeline).to_list(10)
-        incidents_by_store = {item["_id"]: item["count"] for item in store_result}
-        
-        # Recent trend (last 7 days)
-        from datetime import timedelta
-        seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
-        
-        return {
-            "total_videos": total_videos,
-            "total_incidents": total_incidents,
-            "critical_alerts": critical_alerts,
-            "warnings": warnings,
-            "safe_analyses": max(0, safe_analyses),
-            "average_confidence": round(avg_confidence * 100, 1) if avg_confidence else 0,
-            "incidents_by_type": incidents_by_type,
-            "incidents_by_store": incidents_by_store,
-            "detection_rate": round((total_incidents / max(1, total_videos)) * 100, 1)
-        }
-        
-    except Exception as e:
-        logger.error(f"Analytics error: {str(e)}")
-        return {
-            "total_videos": 0,
-            "total_incidents": 0,
-            "critical_alerts": 0,
-            "warnings": 0,
-            "safe_analyses": 0,
-            "average_confidence": 0,
-            "incidents_by_type": {},
-            "incidents_by_store": {},
-            "detection_rate": 0
-        }
-
-@api_router.get("/dashboard/stats")
-async def get_dashboard_stats():
-    """Get real-time dashboard statistics"""
-    try:
-        total_videos = await db.videos.count_documents({})
-        processing_videos = await db.videos.count_documents({"status": "processing"})
-        total_incidents = await db.incidents.count_documents({})
-        critical_count = await db.incidents.count_documents({"severity": "critical"})
-        warning_count = await db.incidents.count_documents({"severity": "warning"})
-        
-        # Get recent incidents
-        recent_incidents = await db.incidents.find(
-            {}, 
-            {"_id": 0, "thumbnail_base64": 0}
-        ).sort("timestamp", -1).to_list(5)
-        
-        # Get recent videos
-        recent_videos = await db.videos.find(
-            {},
-            {"_id": 0, "temp_path": 0}
-        ).sort("uploaded_at", -1).to_list(5)
-        
-        return {
-            "total_videos": total_videos,
-            "processing_videos": processing_videos,
-            "total_incidents": total_incidents,
-            "critical_count": critical_count,
-            "warning_count": warning_count,
-            "safe_count": max(0, total_videos - critical_count - warning_count),
-            "recent_incidents": recent_incidents,
-            "recent_videos": recent_videos,
-            "system_status": "online",
-            "ai_status": "active" if EMERGENT_LLM_KEY else "offline"
-        }
-        
-    except Exception as e:
-        logger.error(f"Dashboard stats error: {str(e)}")
-        return {
-            "total_videos": 0,
-            "processing_videos": 0,
-            "total_incidents": 0,
-            "critical_count": 0,
-            "warning_count": 0,
-            "safe_count": 0,
-            "recent_incidents": [],
-            "recent_videos": [],
-            "system_status": "error",
-            "ai_status": "offline"
-        }
-
-# ============================================
-# WATCHLIST ENDPOINTS
-# ============================================
-
-@api_router.post("/watchlist")
-async def add_to_watchlist(
-    name: str = Form(...),
-    photo: UploadFile = File(...),
-    alias: Optional[str] = Form(None),
-    description: Optional[str] = Form(None),
-    threat_level: str = Form("high"),
-    notes: Optional[str] = Form(None)
-):
-    """Add a person to the watchlist"""
-    try:
-        # Validate image type
-        if not photo.content_type or not photo.content_type.startswith('image/'):
-            raise HTTPException(status_code=400, detail="File must be an image")
-        
-        # Read and encode image
-        content = await photo.read()
-        photo_base64 = base64.b64encode(content).decode('utf-8')
-        
-        person_id = str(uuid.uuid4())
-        person_doc = {
-            "id": person_id,
-            "name": name,
-            "alias": alias,
-            "description": description,
-            "photo_base64": photo_base64,
-            "threat_level": threat_level,
-            "added_at": datetime.now(timezone.utc).isoformat(),
-            "last_seen": None,
-            "notes": notes,
-            "is_active": True
-        }
-        
-        await db.watchlist.insert_one(person_doc)
-        
-        # Return without photo_base64 for response size
-        return {
-            "id": person_id,
-            "name": name,
-            "alias": alias,
-            "threat_level": threat_level,
-            "message": "Person added to watchlist successfully"
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Watchlist add error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@api_router.get("/watchlist")
-async def get_watchlist(active_only: bool = True):
-    """Get all people in the watchlist"""
-    query = {"is_active": True} if active_only else {}
-    # Exclude full photo for list view, include thumbnail info
-    people = await db.watchlist.find(query, {"_id": 0}).sort("added_at", -1).to_list(100)
-    
-    # Add photo preview indicator
-    for person in people:
-        person["has_photo"] = bool(person.get("photo_base64"))
-        # Truncate photo for list view
-        if person.get("photo_base64"):
-            person["photo_preview"] = person["photo_base64"][:100] + "..."
-            del person["photo_base64"]
-    
-    return {"watchlist": people, "total": len(people)}
-
-@api_router.get("/watchlist/{person_id}")
-async def get_watchlist_person(person_id: str):
-    """Get a specific person from watchlist with full photo"""
-    person = await db.watchlist.find_one({"id": person_id}, {"_id": 0})
-    if not person:
-        raise HTTPException(status_code=404, detail="Person not found")
-    return person
-
-@api_router.put("/watchlist/{person_id}")
-async def update_watchlist_person(
-    person_id: str,
-    name: Optional[str] = Form(None),
-    alias: Optional[str] = Form(None),
-    description: Optional[str] = Form(None),
-    threat_level: Optional[str] = Form(None),
-    notes: Optional[str] = Form(None),
-    is_active: Optional[bool] = Form(None)
-):
-    """Update a person in the watchlist"""
-    person = await db.watchlist.find_one({"id": person_id})
-    if not person:
-        raise HTTPException(status_code=404, detail="Person not found")
-    
-    update_data = {}
-    if name is not None: update_data["name"] = name
-    if alias is not None: update_data["alias"] = alias
-    if description is not None: update_data["description"] = description
-    if threat_level is not None: update_data["threat_level"] = threat_level
-    if notes is not None: update_data["notes"] = notes
-    if is_active is not None: update_data["is_active"] = is_active
-    
-    if update_data:
-        await db.watchlist.update_one({"id": person_id}, {"$set": update_data})
-    
-    return {"message": "Person updated successfully"}
-
-@api_router.delete("/watchlist/{person_id}")
-async def delete_watchlist_person(person_id: str):
-    """Delete a person from the watchlist"""
-    result = await db.watchlist.delete_one({"id": person_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Person not found")
-    return {"message": "Person removed from watchlist"}
-
-@api_router.get("/watchlist/stats/summary")
-async def get_watchlist_stats():
-    """Get watchlist statistics"""
-    total = await db.watchlist.count_documents({})
-    active = await db.watchlist.count_documents({"is_active": True})
-    high_threat = await db.watchlist.count_documents({"threat_level": "high", "is_active": True})
-    medium_threat = await db.watchlist.count_documents({"threat_level": "medium", "is_active": True})
-    low_threat = await db.watchlist.count_documents({"threat_level": "low", "is_active": True})
-    
-    return {
-        "total": total,
-        "active": active,
-        "inactive": total - active,
-        "by_threat_level": {
-            "high": high_threat,
-            "medium": medium_threat,
-            "low": low_threat
-        }
-    }
-
-async def check_watchlist_match(frame_base64: str) -> dict:
-    """Check if any person in the watchlist matches the frame using GPT Vision"""
-    # Get active watchlist with photos
-    watchlist = await db.watchlist.find(
-        {"is_active": True}, 
-        {"_id": 0, "id": 1, "name": 1, "alias": 1, "photo_base64": 1, "threat_level": 1}
-    ).to_list(50)
-    
-    if not watchlist:
-        return {"match_found": False, "matches": []}
-    
-    try:
-        # Create a prompt with watchlist context
-        watchlist_descriptions = []
-        for i, person in enumerate(watchlist):
-            desc = f"Person {i+1}: {person['name']}"
-            if person.get('alias'):
-                desc += f" (alias: {person['alias']})"
-            watchlist_descriptions.append(desc)
-        
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=f"watchlist-check-{uuid.uuid4()}",
-            system_message=f"""You are a facial recognition AI. You have a watchlist of known individuals.
-            
-Watchlist:
-{chr(10).join(watchlist_descriptions)}
-
-Compare the provided security camera frame against each watchlist photo.
-Look for facial features, body type, clothing style, and any distinguishing characteristics.
-
-Respond in JSON format:
-{{
-    "match_found": true/false,
-    "matches": [
-        {{
-            "person_index": 1,
-            "confidence": 0.0-1.0,
-            "reasoning": "explanation of match"
-        }}
-    ]
-}}
-
-Only report matches with confidence > 0.6"""
-        ).with_model("openai", "gpt-5.2")
-        
-        # Create image contents - frame + watchlist photos
-        image_contents = [ImageContent(image_base64=frame_base64)]
-        for person in watchlist[:5]:  # Limit to 5 photos to avoid token limits
-            if person.get("photo_base64"):
-                image_contents.append(ImageContent(image_base64=person["photo_base64"]))
-        
-        user_message = UserMessage(
-            text="Compare the first image (security camera frame) against the following watchlist photos. Identify any matches.",
-            file_contents=image_contents
-        )
-        
-        response = await chat.send_message(user_message)
-        
-        # Parse response
-        import json
-        response_text = response.strip()
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-        response_text = response_text.strip()
-        
-        result = json.loads(response_text)
-        
-        # Enrich matches with person data
-        if result.get("match_found") and result.get("matches"):
-            enriched_matches = []
-            for match in result["matches"]:
-                idx = match.get("person_index", 1) - 1
-                if 0 <= idx < len(watchlist):
-                    enriched_matches.append({
-                        "person_id": watchlist[idx]["id"],
-                        "person_name": watchlist[idx]["name"],
-                        "threat_level": watchlist[idx]["threat_level"],
-                        "confidence": match.get("confidence", 0),
-                        "reasoning": match.get("reasoning", "")
-                    })
-            result["matches"] = enriched_matches
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"Watchlist check error: {str(e)}")
-        return {"match_found": False, "matches": [], "error": str(e)}
-
-# ============================================
-# LIVE FEED ENDPOINTS
-# ============================================
-
-@api_router.post("/cameras")
-async def add_camera(
-    name: str = Form(...),
-    source: str = Form(...),
-    location: str = Form("Main Floor"),
-    store_type: str = Form("convenience")
-):
-    """Add a new camera feed"""
-    camera_id = str(uuid.uuid4())
-    camera_doc = {
-        "id": camera_id,
-        "name": name,
-        "source": source,
-        "location": location,
-        "store_type": store_type,
-        "is_active": True,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "last_frame_at": None,
-        "status": "inactive"
-    }
-    
-    await db.cameras.insert_one(camera_doc)
-    
-    return {
-        "id": camera_id,
-        "name": name,
-        "source": source,
-        "message": "Camera added successfully"
-    }
-
-@api_router.get("/cameras")
-async def list_cameras():
-    """List all camera feeds"""
-    cameras = await db.cameras.find({}, {"_id": 0}).to_list(50)
-    return {"cameras": cameras, "total": len(cameras)}
-
-@api_router.get("/cameras/{camera_id}")
-async def get_camera(camera_id: str):
-    """Get a specific camera"""
-    camera = await db.cameras.find_one({"id": camera_id}, {"_id": 0})
-    if not camera:
-        raise HTTPException(status_code=404, detail="Camera not found")
-    return camera
-
-@api_router.delete("/cameras/{camera_id}")
-async def delete_camera(camera_id: str):
-    """Delete a camera feed"""
-    result = await db.cameras.delete_one({"id": camera_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Camera not found")
-    
-    # Remove from live feeds if active
-    if camera_id in live_feeds:
-        del live_feeds[camera_id]
-    
-    return {"message": "Camera deleted"}
-
-@api_router.post("/cameras/{camera_id}/test-rtsp")
-async def test_rtsp_connection(camera_id: str):
-    """Test RTSP connection and capture a frame"""
-    import subprocess
-    
-    # Get camera from admin cameras collection
-    camera = await db.cameras.find_one({"camera_id": camera_id}, {"_id": 0})
-    if not camera:
-        # Try old camera collection
-        camera = await db.cameras.find_one({"id": camera_id}, {"_id": 0})
-    
-    if not camera:
-        raise HTTPException(status_code=404, detail="Camera not found")
-    
-    rtsp_url = camera.get("rtsp_url") or camera.get("source")
-    if not rtsp_url:
-        return {"success": False, "error": "No RTSP URL configured for this camera"}
-    
-    try:
-        # Use ffmpeg to capture a single frame
-        output_path = f"/tmp/rtsp_test_{camera_id}.jpg"
-        cmd = [
-            "ffmpeg", "-y",
-            "-rtsp_transport", "tcp",
-            "-i", rtsp_url,
-            "-frames:v", "1",
-            "-q:v", "2",
-            output_path
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        
-        if result.returncode == 0 and os.path.exists(output_path):
-            # Read and encode the frame
-            with open(output_path, "rb") as f:
-                frame_data = base64.b64encode(f.read()).decode('utf-8')
-            
-            # Clean up
-            os.remove(output_path)
-            
-            # Update camera status
-            await db.cameras.update_one(
-                {"camera_id": camera_id},
-                {"$set": {"status": "online", "last_test_at": datetime.now(timezone.utc).isoformat()}}
-            )
-            
-            return {
-                "success": True,
-                "message": "RTSP connection successful",
-                "frame": f"data:image/jpeg;base64,{frame_data}",
-                "camera_name": camera.get("name")
-            }
-        else:
-            error_msg = result.stderr[:500] if result.stderr else "Unknown error"
-            return {
-                "success": False,
-                "error": f"Failed to connect: {error_msg}",
-                "hint": "Check if the camera is accessible from this network"
-            }
-            
-    except subprocess.TimeoutExpired:
-        return {
-            "success": False,
-            "error": "Connection timeout - camera not reachable",
-            "hint": "The IP address may not be accessible from this server (local network IPs require local deployment)"
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-@api_router.post("/cameras/{camera_id}/start-stream")
-async def start_rtsp_stream(camera_id: str):
-    """Start processing RTSP stream for a camera"""
-    camera = await db.cameras.find_one({"camera_id": camera_id}, {"_id": 0})
-    if not camera:
-        raise HTTPException(status_code=404, detail="Camera not found")
-    
-    rtsp_url = camera.get("rtsp_url")
-    if not rtsp_url:
-        return {"success": False, "error": "No RTSP URL configured"}
-    
-    # Mark camera as streaming
-    await db.cameras.update_one(
-        {"camera_id": camera_id},
-        {"$set": {"status": "streaming", "stream_started_at": datetime.now(timezone.utc).isoformat()}}
-    )
-    
-    return {
-        "success": True,
-        "message": "Stream started",
-        "camera_id": camera_id,
-        "websocket_url": f"/ws/camera/{camera_id}"
-    }
-
-@api_router.post("/live/process-frame")
-async def process_live_frame(
-    frame: UploadFile = File(...),
-    camera_id: Optional[str] = Form(None),
-    draw_overlay: bool = Form(True)
-):
-    """Process a single frame from live feed with real-time detection"""
-    try:
-        # Read frame
-        content = await frame.read()
-        nparr = np.frombuffer(content, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        if img is None:
-            raise HTTPException(status_code=400, detail="Invalid image")
-        
-        # Process frame with detection
-        result = process_frame_with_detection(img, draw_overlay=draw_overlay)
-        
-        # Store in live feed state
-        if camera_id:
-            live_feeds[camera_id] = {
-                "last_result": result,
-                "last_update": datetime.now(timezone.utc).isoformat()
-            }
-            await db.cameras.update_one(
-                {"id": camera_id},
-                {"$set": {"last_frame_at": datetime.now(timezone.utc).isoformat(), "status": "active"}}
-            )
-        
-        # Create incident if critical threat detected
-        if result.get("scene_analysis", {}).get("scene_status") == "critical":
-            for det in result.get("detections", []):
-                if det.get("threat_level") == "critical":
-                    incident = {
-                        "id": str(uuid.uuid4()),
-                        "video_id": camera_id or "live_feed",
-                        "video_name": f"Live Feed - {camera_id or 'Unknown'}",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "severity": "critical",
-                        "description": f"Live detection: {', '.join(det.get('activities', []))}",
-                        "confidence": det.get("threat_score", 0.8),
-                        "frame_index": 0,
-                        "frame_time_seconds": 0,
-                        "frame_image": result.get("frame_annotated"),
-                        "behaviors_detected": det.get("activities", []),
-                        "reasoning": "Real-time threat detection by Decision Engine",
-                        "location": "Live Camera",
-                        "store_type": "convenience",
-                        "analysis_methods": ["YOLO", "Pose Estimation", "Decision Engine"],
-                        "persons_detected": len(result.get("detections", [])),
-                        "concealment_method": "body" if "item_in_pocket" in det.get("activities", []) else "none",
-                        "staff_theft": False,
-                        "movement_towards_exit": det.get("position") in ["left_edge", "right_edge"]
-                    }
-                    await db.incidents.insert_one(incident)
-        
-        return result
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Live frame processing error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@api_router.post("/live/process-video-frame")
-async def process_video_frame(video_id: str, frame_number: int = 0):
-    """Process a specific frame from an uploaded video with live detection overlay"""
-    try:
-        video = await db.videos.find_one({"id": video_id}, {"_id": 0})
-        if not video:
-            raise HTTPException(status_code=404, detail="Video not found")
-        
-        # Try video_path first, then temp_path for backward compatibility
-        video_path = video.get("video_path") or video.get("temp_path")
-        if not video_path or not os.path.exists(video_path):
-            raise HTTPException(status_code=400, detail="Video file not found. Please re-upload the video.")
-        
-        # Open video and get frame
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise HTTPException(status_code=400, detail="Could not open video")
-        
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if frame_number >= total_frames:
-            frame_number = total_frames - 1
-        
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-        ret, frame = cap.read()
-        cap.release()
-        
-        if not ret:
-            raise HTTPException(status_code=400, detail="Could not read frame")
-        
-        # Process frame
-        result = process_frame_with_detection(frame, draw_overlay=True)
-        result["frame_number"] = frame_number
-        result["total_frames"] = total_frames
-        result["video_id"] = video_id
-        
-        return result
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Video frame processing error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@api_router.get("/live/feed/{camera_id}")
-async def get_live_feed_status(camera_id: str):
-    """Get the latest detection results for a camera feed"""
-    if camera_id not in live_feeds:
-        return {"status": "inactive", "message": "No active feed for this camera"}
-    
-    return {
-        "status": "active",
-        **live_feeds[camera_id]
-    }
-
-@api_router.get("/live/demo-frame")
-async def get_demo_frame():
-    """Generate a demo frame with simulated detection for testing"""
-    # Create a demo frame
-    frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    frame[:] = (40, 40, 40)  # Dark gray background
-    
-    # Add some rectangles to simulate a store
-    cv2.rectangle(frame, (50, 100), (200, 400), (60, 60, 60), -1)  # Shelf 1
-    cv2.rectangle(frame, (250, 100), (400, 400), (60, 60, 60), -1)  # Shelf 2
-    cv2.rectangle(frame, (450, 100), (600, 400), (60, 60, 60), -1)  # Shelf 3
-    
-    # Add text
-    cv2.putText(frame, "DEMO FEED - Connect camera for real detection", 
-                (50, 450), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (150, 150, 150), 1)
-    
-    # Encode frame
-    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-    frame_base64 = base64.b64encode(buffer).decode('utf-8')
-    
-    return {
-        "frame_annotated": frame_base64,
-        "detections": [],
-        "scene_analysis": {
-            "total_persons": 0,
-            "suspicious_count": 0,
-            "scene_status": "normal",
-            "activities_summary": {}
-        },
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "is_demo": True
-    }
-
-# Include the router in the main app
-app.include_router(api_router)
-
-# Include auth, admin, and alerts routes with database dependency
-auth_router = create_auth_routes(db)
-admin_router = create_admin_routes(db)
-alerts_router = create_alerts_routes(db)
-app.include_router(auth_router, prefix="/api")
-app.include_router(admin_router, prefix="/api")
-app.include_router(alerts_router, prefix="/api")
-
+# CORS
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
 
-# ML Status endpoint
-@api_router.get("/ml/status")
-async def get_ml_status():
-    """Get status of all ML models"""
-    return {
-        "yolo": {
-            "loaded": yolo_model is not None,
-            "model": "yolov8n.pt" if yolo_model else None
+# ===========================================
+# MODELS
+# ===========================================
+
+class UserRole:
+    SUPER_ADMIN = "super_admin"
+    CLIENT_OWNER = "client_owner"
+    CLIENT_STAFF = "client_staff"
+    CLIENT_VIEWER = "client_viewer"
+
+
+class UserPermissions:
+    """Role-based permissions mapping"""
+    PERMISSIONS = {
+        UserRole.SUPER_ADMIN: {
+            "view_dashboard": True,
+            "view_live": True,
+            "view_incidents": True,
+            "manage_incidents": True,
+            "manage_cameras": True,
+            "manage_watchlist": True,
+            "view_analytics": True,
+            "manage_users": True,
+            "manage_clients": True,
+            "manage_settings": True,
+            "manage_billing": True,
+            "api_access": True,
+            "system_health": True,
+            "ai_model_control": True,
         },
-        "yolo_pose": {
-            "loaded": yolo_pose_model is not None,
-            "model": "yolov8n-pose.pt" if yolo_pose_model else None
+        UserRole.CLIENT_OWNER: {
+            "view_dashboard": True,
+            "view_live": True,
+            "view_incidents": True,
+            "manage_incidents": True,
+            "manage_cameras": True,
+            "manage_watchlist": True,
+            "view_analytics": True,
+            "manage_users": True,
+            "manage_clients": False,
+            "manage_settings": True,
+            "manage_billing": True,
+            "api_access": True,
+            "system_health": False,
+            "ai_model_control": True,
         },
-        "deepface": {
-            "initialized": deepface_initialized
+        UserRole.CLIENT_STAFF: {
+            "view_dashboard": True,
+            "view_live": True,
+            "view_incidents": True,
+            "manage_incidents": True,
+            "manage_cameras": False,
+            "manage_watchlist": False,
+            "view_analytics": True,
+            "manage_users": False,
+            "manage_clients": False,
+            "manage_settings": False,
+            "manage_billing": False,
+            "api_access": False,
+            "system_health": False,
+            "ai_model_control": False,
         },
-        "gpt_vision": {
-            "available": True,
-            "model": "gpt-5.2-vision"
-        }
+        UserRole.CLIENT_VIEWER: {
+            "view_dashboard": True,
+            "view_live": True,
+            "view_incidents": True,
+            "manage_incidents": False,
+            "manage_cameras": False,
+            "manage_watchlist": False,
+            "view_analytics": True,
+            "manage_users": False,
+            "manage_clients": False,
+            "manage_settings": False,
+            "manage_billing": False,
+            "api_access": False,
+            "system_health": False,
+            "ai_model_control": False,
+        },
     }
+    
+    @classmethod
+    def get_permissions(cls, role: str) -> Dict[str, bool]:
+        return cls.PERMISSIONS.get(role, cls.PERMISSIONS[UserRole.CLIENT_VIEWER])
+
+
+class SessionData(BaseModel):
+    id: str
+    email: str
+    name: str
+    picture: Optional[str] = None
+    session_token: str
+
+
+class UserResponse(BaseModel):
+    user_id: str
+    email: str
+    name: str
+    picture: Optional[str] = None
+    role: str
+    permissions: Dict[str, bool]
+    client_id: Optional[str] = None
+    client_name: Optional[str] = None
+
+
+class AuthResponse(BaseModel):
+    success: bool
+    user: Optional[UserResponse] = None
+    message: Optional[str] = None
+    token: Optional[str] = None
+
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str
+    name: str
+
+
+class ClientCreate(BaseModel):
+    name: str
+    slug: Optional[str] = None
+    contact_name: Optional[str] = None
+    contact_email: Optional[EmailStr] = None
+    contact_phone: Optional[str] = None
+    plan: str = "trial"
+
+
+class ClientUpdate(BaseModel):
+    name: Optional[str] = None
+    contact_name: Optional[str] = None
+    contact_email: Optional[EmailStr] = None
+    contact_phone: Optional[str] = None
+    status: Optional[str] = None
+    plan: Optional[str] = None
+
+
+class UserAssign(BaseModel):
+    email: EmailStr
+    role: str
+    client_id: str
+
+
+class CameraCreate(BaseModel):
+    client_id: str
+    name: str
+    location: str
+    rtsp_url: Optional[str] = None
+    detection_enabled: bool = True
+    sensitivity: str = "medium"
+
+
+class AIModelSettings(BaseModel):
+    client_id: str
+    enable_yolo: bool = True
+    enable_deepface: bool = True
+    enable_pose: bool = True
+    enable_gpt_analysis: bool = True
+    detection_sensitivity: str = "medium"
+    threat_threshold: float = 0.6
+
+
+class EdgeDeviceRegister(BaseModel):
+    client_id: str
+    api_key: str
+    device_name: str
+    device_ip: Optional[str] = None
+
+
+class IncidentUpload(BaseModel):
+    client_id: str
+    api_key: str
+    incident_id: str
+    timestamp: str
+    severity: str
+    confidence: float
+    description: str
+    camera_id: Optional[str] = None
+    camera_name: Optional[str] = None
+    frame_thumbnail: Optional[str] = None
+    behaviors: List[str] = []
+    watchlist_match: Optional[Dict] = None
+
+
+class HeartbeatData(BaseModel):
+    client_id: str
+    api_key: str
+    device_id: str
+    status: str
+    cameras_online: int
+    cameras_total: int
+    cpu_usage: float
+    memory_usage: float
+    last_incident_at: Optional[str] = None
+
+
+class TwilioConfig(BaseModel):
+    account_sid: str
+    auth_token: str
+    whatsapp_from: str  # e.g., "whatsapp:+14155238886"
+
+
+class TwilioConfigUpdate(BaseModel):
+    account_sid: Optional[str] = None
+    auth_token: Optional[str] = None
+    whatsapp_from: Optional[str] = None
+    whatsapp_numbers: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+
+
+class WhatsAppTestMessage(BaseModel):
+    to_number: str  # e.g., "+919876543210"
+    message: Optional[str] = "Test alert from SecureGuard AI"
+
+
+# ===========================================
+# HELPER FUNCTIONS
+# ===========================================
+
+def generate_api_key() -> str:
+    """Generate secure API key for edge device"""
+    return f"sg_edge_{secrets.token_urlsafe(32)}"
+
+
+def hash_api_key(api_key: str) -> str:
+    """Hash API key for storage"""
+    salt = os.environ.get("API_KEY_SALT", "secureguard")
+    return hashlib.sha256(f"{api_key}{salt}".encode()).hexdigest()
+
+
+def hash_password(password: str) -> str:
+    """Hash password for storage"""
+    salt = os.environ.get("PASSWORD_SALT", "secureguard_pwd")
+    return hashlib.sha256(f"{password}{salt}".encode()).hexdigest()
+
+
+def verify_password(password: str, hashed: str) -> bool:
+    """Verify password against hash"""
+    return hash_password(password) == hashed
+
+
+def generate_session_token() -> str:
+    """Generate a secure session token"""
+    return secrets.token_urlsafe(32)
+
+
+def encrypt_credential(credential: str) -> str:
+    """Simple encryption for storing credentials (use proper encryption in production)"""
+    # In production, use proper encryption like Fernet
+    import base64
+    return base64.b64encode(credential.encode()).decode()
+
+
+def decrypt_credential(encrypted: str) -> str:
+    """Decrypt stored credential"""
+    import base64
+    return base64.b64decode(encrypted.encode()).decode()
+
+
+async def send_whatsapp_alert(client_id: str, message: str, to_numbers: List[str] = None) -> Dict:
+    """Send WhatsApp alert via Twilio"""
+    if not TWILIO_AVAILABLE:
+        return {"success": False, "error": "Twilio not installed"}
+    
+    # Get client's Twilio config
+    client = await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+    if not client:
+        return {"success": False, "error": "Client not found"}
+    
+    twilio_config = client.get("twilio_config", {})
+    if not twilio_config.get("enabled"):
+        return {"success": False, "error": "Twilio not configured"}
+    
+    try:
+        account_sid = decrypt_credential(twilio_config["account_sid"])
+        auth_token = decrypt_credential(twilio_config["auth_token"])
+        whatsapp_from = twilio_config["whatsapp_from"]
+        
+        twilio_client = TwilioClient(account_sid, auth_token)
+        
+        numbers = to_numbers or twilio_config.get("whatsapp_numbers", [])
+        results = []
+        
+        for number in numbers:
+            try:
+                # Ensure number has whatsapp: prefix
+                to_number = f"whatsapp:{number}" if not number.startswith("whatsapp:") else number
+                
+                msg = twilio_client.messages.create(
+                    body=message,
+                    from_=whatsapp_from,
+                    to=to_number
+                )
+                results.append({"number": number, "status": "sent", "sid": msg.sid})
+                logger.info(f"WhatsApp sent to {number}: {msg.sid}")
+            except Exception as e:
+                results.append({"number": number, "status": "failed", "error": str(e)})
+                logger.error(f"WhatsApp failed to {number}: {e}")
+        
+        return {"success": True, "results": results}
+    except Exception as e:
+        logger.error(f"Twilio error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def verify_edge_api_key(client_id: str, api_key: str) -> bool:
+    """Verify edge device API key"""
+    hashed = hash_api_key(api_key)
+    device = await db.edge_devices.find_one({
+        "client_id": client_id,
+        "api_key_hash": hashed,
+        "is_active": True
+    })
+    return device is not None
+
+
+async def get_client_by_id(client_id: str) -> Optional[Dict]:
+    """Get client by ID"""
+    return await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+
+
+async def get_current_user(request: Request) -> Optional[Dict[str, Any]]:
+    """Extract and validate user from session token"""
+    session_token = None
+    
+    # Try cookie first
+    session_token = request.cookies.get("session_token")
+    
+    # Fallback to Authorization header
+    if not session_token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            session_token = auth_header.split(" ")[1]
+    
+    if not session_token:
+        return None
+    
+    # Find session in database
+    session = await db.user_sessions.find_one(
+        {
+            "session_token": session_token,
+            "expires_at": {"$gt": datetime.now(timezone.utc)}
+        },
+        {"_id": 0}
+    )
+    
+    if not session:
+        return None
+    
+    # Get user data
+    user = await db.users.find_one(
+        {"user_id": session["user_id"]},
+        {"_id": 0}
+    )
+    
+    if not user:
+        return None
+    
+    # Get client info if user has client_id
+    client = None
+    if user.get("client_id"):
+        client = await db.clients.find_one(
+            {"client_id": user["client_id"]},
+            {"_id": 0, "client_id": 1, "name": 1, "status": 1}
+        )
+    
+    return {
+        **user,
+        "session_token": session_token,
+        "client": client
+    }
+
+
+async def require_auth(request: Request) -> Dict[str, Any]:
+    """Dependency that requires authentication"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+async def require_admin(request: Request) -> Dict[str, Any]:
+    """Dependency that requires admin role"""
+    user = await require_auth(request)
+    if user.get("role") != UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+# ===========================================
+# AUTH ROUTES
+# ===========================================
+
+@api_router.post("/auth/register", response_model=AuthResponse)
+async def register_user(data: UserRegister, request: Request, response: Response):
+    """Register a new user with email/password"""
+    try:
+        # Check if user already exists
+        existing_user = await db.users.find_one({"email": data.email})
+        if existing_user:
+            return AuthResponse(success=False, message="Email already registered")
+        
+        # Check if this is the first user (becomes super admin)
+        user_count = await db.users.count_documents({})
+        user_id = f"usr_{uuid.uuid4().hex[:12]}"
+        
+        if user_count == 0:
+            role = UserRole.SUPER_ADMIN
+            client_id = None
+        else:
+            role = UserRole.CLIENT_VIEWER
+            client_id = None
+        
+        # Create user
+        new_user = {
+            "user_id": user_id,
+            "email": data.email,
+            "name": data.name,
+            "password_hash": hash_password(data.password),
+            "picture": None,
+            "role": role,
+            "client_id": client_id,
+            "is_active": True,
+            "auth_provider": "local",
+            "login_count": 1,
+            "last_login_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc)
+        }
+        await db.users.insert_one(new_user)
+        
+        # Create session
+        session_token = generate_session_token()
+        expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_EXPIRY_DAYS)
+        await db.user_sessions.insert_one({
+            "user_id": user_id,
+            "session_token": session_token,
+            "expires_at": expires_at,
+            "created_at": datetime.now(timezone.utc)
+        })
+        
+        # Set cookie
+        is_secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+        response.set_cookie(
+            key="session_token",
+            value=session_token,
+            httponly=True,
+            secure=is_secure,
+            samesite="none" if is_secure else "lax",
+            path="/",
+            max_age=SESSION_EXPIRY_DAYS * 24 * 60 * 60
+        )
+        
+        permissions = UserPermissions.get_permissions(role)
+        
+        logger.info(f"User registered: {data.email}, role: {role}")
+        
+        return AuthResponse(
+            success=True,
+            token=session_token,
+            user=UserResponse(
+                user_id=user_id,
+                email=data.email,
+                name=data.name,
+                picture=None,
+                role=role,
+                permissions=permissions,
+                client_id=client_id,
+                client_name=None
+            )
+        )
+        
+    except Exception as e:
+        logger.error(f"Registration error: {e}")
+        return AuthResponse(success=False, message=str(e))
+
+
+@api_router.post("/auth/login", response_model=AuthResponse)
+async def login_user(data: UserLogin, request: Request, response: Response):
+    """Login with email/password"""
+    try:
+        # Find user
+        user = await db.users.find_one({"email": data.email}, {"_id": 0})
+        
+        if not user:
+            return AuthResponse(success=False, message="Invalid email or password")
+        
+        # Check password
+        if not user.get("password_hash"):
+            return AuthResponse(success=False, message="This account uses Google login. Please sign in with Google.")
+        
+        if not verify_password(data.password, user["password_hash"]):
+            return AuthResponse(success=False, message="Invalid email or password")
+        
+        if not user.get("is_active", True):
+            return AuthResponse(success=False, message="Account is disabled")
+        
+        # Update login stats
+        await db.users.update_one(
+            {"user_id": user["user_id"]},
+            {
+                "$set": {
+                    "last_login_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc)
+                },
+                "$inc": {"login_count": 1}
+            }
+        )
+        
+        # Create session
+        session_token = generate_session_token()
+        expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_EXPIRY_DAYS)
+        await db.user_sessions.insert_one({
+            "user_id": user["user_id"],
+            "session_token": session_token,
+            "expires_at": expires_at,
+            "created_at": datetime.now(timezone.utc)
+        })
+        
+        # Set cookie
+        is_secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+        response.set_cookie(
+            key="session_token",
+            value=session_token,
+            httponly=True,
+            secure=is_secure,
+            samesite="none" if is_secure else "lax",
+            path="/",
+            max_age=SESSION_EXPIRY_DAYS * 24 * 60 * 60
+        )
+        
+        # Get client info
+        client_name = None
+        if user.get("client_id"):
+            client_doc = await db.clients.find_one(
+                {"client_id": user["client_id"]},
+                {"_id": 0, "name": 1}
+            )
+            if client_doc:
+                client_name = client_doc["name"]
+        
+        permissions = UserPermissions.get_permissions(user.get("role", UserRole.CLIENT_VIEWER))
+        
+        logger.info(f"User logged in: {data.email}")
+        
+        return AuthResponse(
+            success=True,
+            token=session_token,
+            user=UserResponse(
+                user_id=user["user_id"],
+                email=user["email"],
+                name=user["name"],
+                picture=user.get("picture"),
+                role=user.get("role", UserRole.CLIENT_VIEWER),
+                permissions=permissions,
+                client_id=user.get("client_id"),
+                client_name=client_name
+            )
+        )
+        
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        return AuthResponse(success=False, message=str(e))
+
+
+@api_router.post("/auth/session", response_model=AuthResponse)
+async def process_session(request: Request, response: Response):
+    """Process session_id from Emergent OAuth callback"""
+    try:
+        body = await request.json()
+        session_id = body.get("session_id")
+        
+        logger.info(f"Processing session: {session_id[:20]}..." if session_id else "No session_id")
+        
+        if not session_id:
+            return AuthResponse(success=False, message="Missing session_id")
+        
+        # Exchange session_id with Emergent Auth
+        async with httpx.AsyncClient() as client:
+            auth_response = await client.get(
+                EMERGENT_AUTH_URL,
+                headers={"X-Session-ID": session_id}
+            )
+            
+            if auth_response.status_code != 200:
+                logger.error(f"Emergent auth failed: {auth_response.text}")
+                return AuthResponse(success=False, message="Authentication failed")
+            
+            session_data = SessionData(**auth_response.json())
+        
+        # Check if user exists
+        existing_user = await db.users.find_one(
+            {"email": session_data.email},
+            {"_id": 0}
+        )
+        
+        if existing_user:
+            # Update existing user
+            user_id = existing_user["user_id"]
+            await db.users.update_one(
+                {"user_id": user_id},
+                {
+                    "$set": {
+                        "name": session_data.name,
+                        "picture": session_data.picture,
+                        "last_login_at": datetime.now(timezone.utc),
+                        "updated_at": datetime.now(timezone.utc)
+                    },
+                    "$inc": {"login_count": 1}
+                }
+            )
+            role = existing_user.get("role", UserRole.CLIENT_VIEWER)
+            client_id = existing_user.get("client_id")
+        else:
+            # Create new user - first user becomes super admin
+            user_count = await db.users.count_documents({})
+            user_id = f"usr_{uuid.uuid4().hex[:12]}"
+            
+            if user_count == 0:
+                role = UserRole.SUPER_ADMIN
+                client_id = None
+            else:
+                role = UserRole.CLIENT_VIEWER
+                client_id = None
+            
+            new_user = {
+                "user_id": user_id,
+                "email": session_data.email,
+                "name": session_data.name,
+                "picture": session_data.picture,
+                "role": role,
+                "client_id": client_id,
+                "is_active": True,
+                "login_count": 1,
+                "last_login_at": datetime.now(timezone.utc),
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc)
+            }
+            await db.users.insert_one(new_user)
+        
+        # Create session
+        expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_EXPIRY_DAYS)
+        await db.user_sessions.insert_one({
+            "user_id": user_id,
+            "session_token": session_data.session_token,
+            "expires_at": expires_at,
+            "created_at": datetime.now(timezone.utc)
+        })
+        
+        # Get client info
+        client_name = None
+        if client_id:
+            client_doc = await db.clients.find_one(
+                {"client_id": client_id},
+                {"_id": 0, "name": 1}
+            )
+            if client_doc:
+                client_name = client_doc["name"]
+        
+        # Set httpOnly cookie
+        # Detect if running over HTTPS
+        is_secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+        
+        logger.info(f"Setting cookie - is_secure: {is_secure}, user_id: {user_id}, role: {role}")
+        
+        response.set_cookie(
+            key="session_token",
+            value=session_data.session_token,
+            httponly=True,
+            secure=is_secure,
+            samesite="none" if is_secure else "lax",
+            path="/",
+            max_age=SESSION_EXPIRY_DAYS * 24 * 60 * 60
+        )
+        
+        permissions = UserPermissions.get_permissions(role)
+        
+        return AuthResponse(
+            success=True,
+            token=session_data.session_token,
+            user=UserResponse(
+                user_id=user_id,
+                email=session_data.email,
+                name=session_data.name,
+                picture=session_data.picture,
+                role=role,
+                permissions=permissions,
+                client_id=client_id,
+                client_name=client_name
+            )
+        )
+        
+    except Exception as e:
+        logger.error(f"Session processing error: {e}")
+        return AuthResponse(success=False, message=str(e))
+
+
+@api_router.get("/auth/me", response_model=AuthResponse)
+async def get_current_user_info(request: Request):
+    """Get current authenticated user info"""
+    user = await get_current_user(request)
+    
+    if not user:
+        return AuthResponse(success=False, message="Not authenticated")
+    
+    client_name = None
+    if user.get("client"):
+        client_name = user["client"].get("name")
+    
+    permissions = UserPermissions.get_permissions(user.get("role", UserRole.CLIENT_VIEWER))
+    
+    return AuthResponse(
+        success=True,
+        user=UserResponse(
+            user_id=user["user_id"],
+            email=user["email"],
+            name=user["name"],
+            picture=user.get("picture"),
+            role=user.get("role", UserRole.CLIENT_VIEWER),
+            permissions=permissions,
+            client_id=user.get("client_id"),
+            client_name=client_name
+        )
+    )
+
+
+@api_router.post("/auth/logout")
+async def logout(request: Request, response: Response):
+    """Logout user and invalidate session"""
+    session_token = request.cookies.get("session_token")
+    
+    if session_token:
+        await db.user_sessions.delete_one({"session_token": session_token})
+    
+    # Detect if running over HTTPS
+    is_secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    
+    response.delete_cookie(
+        key="session_token",
+        path="/",
+        secure=is_secure,
+        samesite="none" if is_secure else "lax"
+    )
+    
+    return {"success": True, "message": "Logged out successfully"}
+
+
+# ===========================================
+# ADMIN DASHBOARD ROUTES
+# ===========================================
+
+@api_router.get("/admin/dashboard/stats")
+async def get_admin_dashboard_stats(request: Request):
+    """Get admin dashboard statistics"""
+    await require_admin(request)
+    
+    # Count clients
+    total_clients = await db.clients.count_documents({})
+    active_clients = await db.clients.count_documents({"status": "active"})
+    trial_clients = await db.clients.count_documents({"status": "trial"})
+    
+    # Count cameras
+    total_cameras = await db.cameras.count_documents({})
+    online_cameras = await db.cameras.count_documents({"status": "online"})
+    
+    # Count incidents (last 24 hours)
+    yesterday = datetime.now(timezone.utc) - timedelta(hours=24)
+    incidents_24h = await db.incidents.count_documents({
+        "timestamp": {"$gte": yesterday.isoformat()}
+    })
+    critical_24h = await db.incidents.count_documents({
+        "timestamp": {"$gte": yesterday.isoformat()},
+        "severity": "critical"
+    })
+    
+    # Count users
+    total_users = await db.users.count_documents({})
+    
+    # Edge devices
+    total_edge_devices = await db.edge_devices.count_documents({})
+    online_devices = await db.edge_devices.count_documents({
+        "last_heartbeat": {"$gte": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()}
+    })
+    
+    # Calculate monthly revenue (from active subscriptions)
+    revenue_pipeline = [
+        {"$match": {"status": "active"}},
+        {"$group": {"_id": None, "total": {"$sum": "$subscription.price_cents"}}}
+    ]
+    revenue_result = await db.clients.aggregate(revenue_pipeline).to_list(1)
+    monthly_revenue = revenue_result[0]["total"] if revenue_result else 0
+    
+    return {
+        "total_clients": total_clients,
+        "active_clients": active_clients,
+        "trial_clients": trial_clients,
+        "total_cameras": total_cameras,
+        "online_cameras": online_cameras,
+        "total_incidents_24h": incidents_24h,
+        "critical_incidents_24h": critical_24h,
+        "total_users": total_users,
+        "total_edge_devices": total_edge_devices,
+        "online_devices": online_devices,
+        "monthly_revenue_cents": monthly_revenue
+    }
+
+
+@api_router.get("/admin/system/health")
+async def get_system_health(request: Request):
+    """Get system health metrics"""
+    await require_admin(request)
+    
+    try:
+        await db.command("ping")
+        db_status = "healthy"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+    
+    active_streams = await db.cameras.count_documents({"status": "online"})
+    
+    return {
+        "status": "operational",
+        "database": db_status,
+        "active_streams": active_streams,
+        "queue_depth": 0,
+        "ml_models": {
+            "note": "ML models run on edge devices"
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+# ===========================================
+# CLIENT MANAGEMENT
+# ===========================================
+
+@api_router.get("/admin/clients")
+async def list_clients(
+    request: Request,
+    status: Optional[str] = None,
+    plan: Optional[str] = None,
+    limit: int = 50,
+    skip: int = 0
+):
+    """List all clients"""
+    await require_admin(request)
+    
+    query = {}
+    if status:
+        query["status"] = status
+    if plan:
+        query["subscription.plan"] = plan
+    
+    clients = await db.clients.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    total = await db.clients.count_documents(query)
+    
+    # Add stats for each client
+    for client in clients:
+        client["cameras_count"] = await db.cameras.count_documents({"client_id": client["client_id"]})
+        client["users_count"] = await db.users.count_documents({"client_id": client["client_id"]})
+        client["edge_devices"] = await db.edge_devices.count_documents({"client_id": client["client_id"]})
+        
+        yesterday = datetime.now(timezone.utc) - timedelta(hours=24)
+        client["incidents_24h"] = await db.incidents.count_documents({
+            "client_id": client["client_id"],
+            "timestamp": {"$gte": yesterday.isoformat()}
+        })
+    
+    return {"clients": clients, "total": total, "limit": limit, "skip": skip}
+
+
+@api_router.post("/admin/clients")
+async def create_client(request: Request, client_data: ClientCreate):
+    """Create a new client"""
+    await require_admin(request)
+    
+    # Generate slug if not provided
+    slug = client_data.slug or client_data.name.lower().replace(" ", "-")
+    
+    # Check if slug is unique
+    existing = await db.clients.find_one({"slug": slug})
+    if existing:
+        slug = f"{slug}-{uuid.uuid4().hex[:6]}"
+    
+    plan_config = PLANS.get(client_data.plan, PLANS["trial"])
+    client_id = f"cli_{uuid.uuid4().hex[:12]}"
+    
+    new_client = {
+        "client_id": client_id,
+        "name": client_data.name,
+        "slug": slug,
+        "contact": {
+            "name": client_data.contact_name or "",
+            "email": client_data.contact_email or "",
+            "phone": client_data.contact_phone or ""
+        },
+        "subscription": {
+            "plan": client_data.plan,
+            "max_cameras": plan_config["max_cameras"],
+            "max_users": plan_config["max_users"],
+            "max_watchlist": plan_config["max_watchlist"],
+            "features": plan_config["features"],
+            "price_cents": plan_config["price_cents"],
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at": None
+        },
+        "settings": {
+            "timezone": "UTC",
+            "alert_email": True,
+            "detection_sensitivity": "medium",
+            "auto_incident_creation": True,
+            "alert_on_critical": True,
+            "alert_on_warning": False,
+            "whatsapp_numbers": []
+        },
+        "status": "trial" if client_data.plan == "trial" else "active",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.clients.insert_one(new_client)
+    
+    # Remove MongoDB _id before returning
+    new_client.pop("_id", None)
+    
+    return {"success": True, "client": new_client, "client_id": client_id}
+
+
+@api_router.get("/admin/clients/{client_id}")
+async def get_client(request: Request, client_id: str):
+    """Get client details"""
+    await require_admin(request)
+    
+    client = await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Add detailed stats
+    client["cameras"] = await db.cameras.find({"client_id": client_id}, {"_id": 0}).to_list(100)
+    client["users"] = await db.users.find(
+        {"client_id": client_id}, 
+        {"_id": 0, "user_id": 1, "email": 1, "name": 1, "role": 1, "last_login_at": 1}
+    ).to_list(100)
+    client["edge_devices"] = await db.edge_devices.find(
+        {"client_id": client_id},
+        {"_id": 0, "api_key_hash": 0}
+    ).to_list(100)
+    
+    client["total_incidents"] = await db.incidents.count_documents({"client_id": client_id})
+    client["watchlist_count"] = await db.watchlist.count_documents({"client_id": client_id})
+    
+    return client
+
+
+@api_router.put("/admin/clients/{client_id}")
+async def update_client(request: Request, client_id: str, update_data: ClientUpdate):
+    """Update client details"""
+    await require_admin(request)
+    
+    client = await db.clients.find_one({"client_id": client_id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if update_data.name:
+        update_dict["name"] = update_data.name
+    if update_data.contact_name:
+        update_dict["contact.name"] = update_data.contact_name
+    if update_data.contact_email:
+        update_dict["contact.email"] = update_data.contact_email
+    if update_data.contact_phone:
+        update_dict["contact.phone"] = update_data.contact_phone
+    if update_data.status:
+        update_dict["status"] = update_data.status
+    if update_data.plan:
+        plan_config = PLANS.get(update_data.plan, PLANS["starter"])
+        update_dict["subscription.plan"] = update_data.plan
+        update_dict["subscription.max_cameras"] = plan_config["max_cameras"]
+        update_dict["subscription.max_users"] = plan_config["max_users"]
+        update_dict["subscription.price_cents"] = plan_config["price_cents"]
+    
+    await db.clients.update_one({"client_id": client_id}, {"$set": update_dict})
+    
+    return {"success": True, "message": "Client updated"}
+
+
+@api_router.delete("/admin/clients/{client_id}")
+async def delete_client(request: Request, client_id: str):
+    """Delete a client and all associated data"""
+    await require_admin(request)
+    
+    client = await db.clients.find_one({"client_id": client_id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Delete all associated data
+    await db.cameras.delete_many({"client_id": client_id})
+    await db.incidents.delete_many({"client_id": client_id})
+    await db.watchlist.delete_many({"client_id": client_id})
+    await db.edge_devices.delete_many({"client_id": client_id})
+    await db.users.update_many(
+        {"client_id": client_id},
+        {"$set": {"client_id": None, "role": UserRole.CLIENT_VIEWER}}
+    )
+    await db.clients.delete_one({"client_id": client_id})
+    
+    return {"success": True, "message": "Client and associated data deleted"}
+
+
+@api_router.post("/admin/clients/{client_id}/suspend")
+async def suspend_client(request: Request, client_id: str):
+    """Suspend a client"""
+    await require_admin(request)
+    
+    result = await db.clients.update_one(
+        {"client_id": client_id},
+        {"$set": {"status": "suspended", "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    return {"success": True, "message": "Client suspended"}
+
+
+@api_router.post("/admin/clients/{client_id}/activate")
+async def activate_client(request: Request, client_id: str):
+    """Activate a client"""
+    await require_admin(request)
+    
+    result = await db.clients.update_one(
+        {"client_id": client_id},
+        {"$set": {"status": "active", "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    return {"success": True, "message": "Client activated"}
+
+
+# ===========================================
+# USER MANAGEMENT
+# ===========================================
+
+@api_router.get("/admin/users")
+async def list_all_users(
+    request: Request,
+    role: Optional[str] = None,
+    client_id: Optional[str] = None,
+    limit: int = 50,
+    skip: int = 0
+):
+    """List all users (admin only)"""
+    await require_admin(request)
+    
+    query = {}
+    if role:
+        query["role"] = role
+    if client_id:
+        query["client_id"] = client_id
+    
+    users = await db.users.find(
+        query,
+        {"_id": 0, "user_id": 1, "email": 1, "name": 1, "role": 1, "client_id": 1, "last_login_at": 1, "is_active": 1}
+    ).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    
+    total = await db.users.count_documents(query)
+    
+    # Add client names
+    for u in users:
+        if u.get("client_id"):
+            client = await db.clients.find_one({"client_id": u["client_id"]}, {"_id": 0, "name": 1})
+            u["client_name"] = client["name"] if client else None
+    
+    return {"users": users, "total": total}
+
+
+@api_router.put("/admin/users/{user_id}/assign")
+async def assign_user_to_client(request: Request, user_id: str, assignment: UserAssign):
+    """Assign a user to a client with a role"""
+    await require_admin(request)
+    
+    user = await db.users.find_one({"user_id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    client = await db.clients.find_one({"client_id": assignment.client_id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    await db.users.update_one(
+        {"user_id": user_id},
+        {
+            "$set": {
+                "client_id": assignment.client_id,
+                "role": assignment.role,
+                "updated_at": datetime.now(timezone.utc)
+            }
+        }
+    )
+    
+    return {"success": True, "message": f"User assigned to {client['name']} as {assignment.role}"}
+
+
+@api_router.put("/admin/users/{user_id}/role")
+async def update_user_role(request: Request, user_id: str, role: str):
+    """Update user role"""
+    await require_admin(request)
+    
+    valid_roles = [UserRole.SUPER_ADMIN, UserRole.CLIENT_OWNER, UserRole.CLIENT_STAFF, UserRole.CLIENT_VIEWER]
+    if role not in valid_roles:
+        raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {valid_roles}")
+    
+    result = await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": {"role": role, "updated_at": datetime.now(timezone.utc)}}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return {"success": True, "message": f"User role updated to {role}"}
+
+
+# ===========================================
+# CAMERA MANAGEMENT
+# ===========================================
+
+@api_router.get("/admin/cameras")
+async def list_all_cameras(
+    request: Request,
+    client_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100
+):
+    """List all cameras across all clients"""
+    await require_admin(request)
+    
+    query = {}
+    if client_id:
+        query["client_id"] = client_id
+    if status:
+        query["status"] = status
+    
+    cameras = await db.cameras.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    
+    # Add client names
+    for cam in cameras:
+        client = await db.clients.find_one({"client_id": cam["client_id"]}, {"_id": 0, "name": 1})
+        cam["client_name"] = client["name"] if client else None
+    
+    return {"cameras": cameras, "total": len(cameras)}
+
+
+@api_router.post("/admin/cameras")
+async def create_camera(request: Request, camera_data: CameraCreate):
+    """Create a new camera for a client"""
+    await require_admin(request)
+    
+    client = await db.clients.find_one({"client_id": camera_data.client_id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Check camera limit
+    current_cameras = await db.cameras.count_documents({"client_id": camera_data.client_id})
+    max_cameras = client.get("subscription", {}).get("max_cameras", 2)
+    if max_cameras != -1 and current_cameras >= max_cameras:
+        raise HTTPException(status_code=400, detail=f"Camera limit reached ({max_cameras})")
+    
+    camera_id = f"cam_{uuid.uuid4().hex[:12]}"
+    
+    new_camera = {
+        "camera_id": camera_id,
+        "client_id": camera_data.client_id,
+        "name": camera_data.name,
+        "location": camera_data.location,
+        "rtsp_url": camera_data.rtsp_url,
+        "detection_settings": {
+            "enabled": camera_data.detection_enabled,
+            "sensitivity": camera_data.sensitivity,
+            "enable_pose": True,
+            "enable_face_recognition": True,
+            "enable_gpt_analysis": True
+        },
+        "status": "offline",
+        "health": {
+            "uptime_percent": 0,
+            "error_count_24h": 0
+        },
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.cameras.insert_one(new_camera)
+    
+    return {"success": True, "camera_id": camera_id}
+
+
+@api_router.put("/admin/cameras/{camera_id}")
+async def update_camera(request: Request, camera_id: str):
+    """Update a camera"""
+    await require_admin(request)
+    
+    camera = await db.cameras.find_one({"camera_id": camera_id})
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    
+    body = await request.json()
+    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if "name" in body:
+        update_dict["name"] = body["name"]
+    if "location" in body:
+        update_dict["location"] = body["location"]
+    if "rtsp_url" in body:
+        update_dict["rtsp_url"] = body["rtsp_url"]
+    if "status" in body:
+        update_dict["status"] = body["status"]
+    if "detection_settings" in body:
+        update_dict["detection_settings"] = body["detection_settings"]
+    
+    await db.cameras.update_one({"camera_id": camera_id}, {"$set": update_dict})
+    
+    return {"success": True, "message": "Camera updated"}
+
+
+@api_router.delete("/admin/cameras/{camera_id}")
+async def delete_camera(request: Request, camera_id: str):
+    """Delete a camera"""
+    await require_admin(request)
+    
+    result = await db.cameras.delete_one({"camera_id": camera_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    
+    return {"success": True, "message": "Camera deleted"}
+
+
+# ===========================================
+# AI MODEL CONTROL
+# ===========================================
+
+@api_router.get("/admin/ai/settings/{client_id}")
+async def get_ai_settings(request: Request, client_id: str):
+    """Get AI model settings for a client"""
+    await require_admin(request)
+    
+    client = await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    ai_settings = client.get("ai_settings", {
+        "enable_yolo": True,
+        "enable_deepface": True,
+        "enable_pose": True,
+        "enable_gpt_analysis": client.get("subscription", {}).get("plan") in ["professional", "enterprise"],
+        "detection_sensitivity": "medium",
+        "threat_threshold": 0.6
+    })
+    
+    return {"client_id": client_id, "settings": ai_settings}
+
+
+@api_router.put("/admin/ai/settings")
+async def update_ai_settings(request: Request, settings: AIModelSettings):
+    """Update AI model settings for a client"""
+    await require_admin(request)
+    
+    client = await db.clients.find_one({"client_id": settings.client_id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    await db.clients.update_one(
+        {"client_id": settings.client_id},
+        {
+            "$set": {
+                "ai_settings": {
+                    "enable_yolo": settings.enable_yolo,
+                    "enable_deepface": settings.enable_deepface,
+                    "enable_pose": settings.enable_pose,
+                    "enable_gpt_analysis": settings.enable_gpt_analysis,
+                    "detection_sensitivity": settings.detection_sensitivity,
+                    "threat_threshold": settings.threat_threshold
+                },
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+        }
+    )
+    
+    return {"success": True, "message": "AI settings updated"}
+
+
+# ===========================================
+# INCIDENTS
+# ===========================================
+
+@api_router.get("/admin/incidents/recent")
+async def get_recent_incidents_all(request: Request, limit: int = 20):
+    """Get recent incidents across all clients"""
+    await require_admin(request)
+    
+    incidents = await db.incidents.find(
+        {},
+        {"_id": 0, "frame_image": 0, "frame_thumbnail": 0}
+    ).sort("timestamp", -1).limit(limit).to_list(limit)
+    
+    # Add client names
+    for inc in incidents:
+        if inc.get("client_id"):
+            client = await db.clients.find_one({"client_id": inc["client_id"]}, {"_id": 0, "name": 1})
+            inc["client_name"] = client["name"] if client else None
+    
+    return {"incidents": incidents}
+
+
+@api_router.get("/incidents")
+async def get_incidents(
+    request: Request,
+    client_id: Optional[str] = None,
+    severity: Optional[str] = None,
+    limit: int = 50,
+    skip: int = 0
+):
+    """Get incidents - accessible by authenticated users"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    query = {}
+    
+    # Non-admin users can only see their client's incidents
+    if user.get("role") != UserRole.SUPER_ADMIN:
+        if user.get("client_id"):
+            query["client_id"] = user["client_id"]
+        else:
+            return {"incidents": [], "total": 0}
+    elif client_id:
+        query["client_id"] = client_id
+    
+    if severity:
+        query["severity"] = severity
+    
+    incidents = await db.incidents.find(
+        query,
+        {"_id": 0, "frame_image": 0}
+    ).sort("timestamp", -1).skip(skip).limit(limit).to_list(limit)
+    
+    total = await db.incidents.count_documents(query)
+    
+    return {"incidents": incidents, "total": total, "limit": limit, "skip": skip}
+
+
+# ===========================================
+# ML STATUS
+# ===========================================
+
+@api_router.get("/ml/status")
+async def get_ml_status(request: Request):
+    """Get ML model status - models run on edge devices"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # In the central/edge architecture, ML models run on edge devices
+    # This endpoint returns the status of connected edge devices with ML capabilities
+    
+    query = {}
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id"):
+        query["client_id"] = user["client_id"]
+    
+    # Get edge devices and their ML status
+    edge_devices = await db.edge_devices.find(query, {"_id": 0, "api_key_hash": 0}).to_list(100)
+    
+    online_devices = [d for d in edge_devices if d.get("is_online") or 
+                      (d.get("last_heartbeat") and 
+                       (datetime.now(timezone.utc) - datetime.fromisoformat(d["last_heartbeat"].replace("Z", "+00:00"))).seconds < 300)]
+    
+    return {
+        "status": "operational" if online_devices else "no_devices",
+        "architecture": "edge_processing",
+        "message": "ML models run on edge devices at client locations",
+        "models": {
+            "yolo": {"name": "YOLOv8", "status": "available", "location": "edge_device"},
+            "pose": {"name": "YOLO Pose", "status": "available", "location": "edge_device"},
+            "deepface": {"name": "DeepFace", "status": "available", "location": "edge_device"},
+            "gpt_vision": {"name": "GPT-5.2 Vision", "status": "available", "location": "edge_device"}
+        },
+        "edge_devices": {
+            "total": len(edge_devices),
+            "online": len(online_devices)
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+# ===========================================
+# ALERTS
+# ===========================================
+
+@api_router.get("/alerts/status")
+async def get_alerts_status(request: Request):
+    """Get alerts system status"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    query = {}
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id"):
+        query["client_id"] = user["client_id"]
+    
+    # Count recent alerts
+    yesterday = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    
+    if query:
+        total_24h = await db.incidents.count_documents({**query, "timestamp": {"$gte": yesterday}})
+        critical_24h = await db.incidents.count_documents({**query, "timestamp": {"$gte": yesterday}, "severity": "critical"})
+        warning_24h = await db.incidents.count_documents({**query, "timestamp": {"$gte": yesterday}, "severity": "warning"})
+    else:
+        total_24h = await db.incidents.count_documents({"timestamp": {"$gte": yesterday}})
+        critical_24h = await db.incidents.count_documents({"timestamp": {"$gte": yesterday}, "severity": "critical"})
+        warning_24h = await db.incidents.count_documents({"timestamp": {"$gte": yesterday}, "severity": "warning"})
+    
+    return {
+        "status": "active",
+        "channels": {
+            "email": True,
+            "whatsapp": True,
+            "dashboard": True,
+            "push": True
+        },
+        "alerts_24h": {
+            "total": total_24h,
+            "critical": critical_24h,
+            "warning": warning_24h
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@api_router.get("/alerts/settings/{client_id}")
+async def get_alert_settings(request: Request, client_id: str):
+    """Get alert settings for a client"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check access
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    client = await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    settings = client.get("settings", {})
+    
+    return {
+        "client_id": client_id,
+        "alert_on_critical": settings.get("alert_on_critical", True),
+        "alert_on_warning": settings.get("alert_on_warning", False),
+        "alert_email": settings.get("alert_email", True),
+        "email_recipients": settings.get("email_recipients", []),
+        "whatsapp_enabled": len(settings.get("whatsapp_numbers", [])) > 0,
+        "whatsapp_numbers": settings.get("whatsapp_numbers", []),
+        "detection_sensitivity": settings.get("detection_sensitivity", "medium"),
+        "auto_incident_creation": settings.get("auto_incident_creation", True)
+    }
+
+
+@api_router.put("/alerts/settings/{client_id}")
+async def update_alert_settings(request: Request, client_id: str):
+    """Update alert settings for a client"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check access
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    client = await db.clients.find_one({"client_id": client_id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    body = await request.json()
+    
+    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if "alert_on_critical" in body:
+        update_dict["settings.alert_on_critical"] = body["alert_on_critical"]
+    if "alert_on_warning" in body:
+        update_dict["settings.alert_on_warning"] = body["alert_on_warning"]
+    if "alert_email" in body:
+        update_dict["settings.alert_email"] = body["alert_email"]
+    if "email_recipients" in body:
+        update_dict["settings.email_recipients"] = body["email_recipients"]
+    if "whatsapp_numbers" in body:
+        update_dict["settings.whatsapp_numbers"] = body["whatsapp_numbers"]
+    if "detection_sensitivity" in body:
+        update_dict["settings.detection_sensitivity"] = body["detection_sensitivity"]
+    if "auto_incident_creation" in body:
+        update_dict["settings.auto_incident_creation"] = body["auto_incident_creation"]
+    
+    await db.clients.update_one(
+        {"client_id": client_id},
+        {"$set": update_dict}
+    )
+    
+    return {"success": True, "message": "Alert settings updated"}
+
+
+@api_router.get("/alerts/log/{client_id}")
+async def get_alert_log(request: Request, client_id: str, limit: int = 50):
+    """Get alert log for a client"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check access
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Get recent incidents/alerts for this client
+    alerts = await db.incidents.find(
+        {"client_id": client_id},
+        {"_id": 0, "frame_image": 0, "frame_thumbnail": 0}
+    ).sort("timestamp", -1).limit(limit).to_list(limit)
+    
+    # Also check for alert_logs collection if it exists
+    alert_logs = await db.alert_logs.find(
+        {"client_id": client_id},
+        {"_id": 0}
+    ).sort("timestamp", -1).limit(limit).to_list(limit)
+    
+    return {
+        "client_id": client_id,
+        "alerts": alerts,
+        "notification_logs": alert_logs,
+        "total_alerts": len(alerts),
+        "total_notifications": len(alert_logs)
+    }
+
+
+# ===========================================
+# TWILIO / WHATSAPP CONFIGURATION
+# ===========================================
+
+@api_router.get("/alerts/twilio/{client_id}")
+async def get_twilio_config(request: Request, client_id: str):
+    """Get Twilio configuration for a client (credentials masked)"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check access
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    client = await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    twilio_config = client.get("twilio_config", {})
+    
+    # Mask sensitive data
+    account_sid = twilio_config.get("account_sid", "")
+    if account_sid:
+        try:
+            decrypted = decrypt_credential(account_sid)
+            account_sid = decrypted[:8] + "****" + decrypted[-4:] if len(decrypted) > 12 else "****"
+        except:
+            account_sid = "****configured****"
+    
+    return {
+        "client_id": client_id,
+        "configured": bool(twilio_config.get("account_sid")),
+        "enabled": twilio_config.get("enabled", False),
+        "account_sid_masked": account_sid,
+        "whatsapp_from": twilio_config.get("whatsapp_from", ""),
+        "whatsapp_numbers": twilio_config.get("whatsapp_numbers", []),
+        "twilio_available": TWILIO_AVAILABLE
+    }
+
+
+@api_router.put("/alerts/twilio/{client_id}")
+async def update_twilio_config(request: Request, client_id: str, config: TwilioConfigUpdate):
+    """Update Twilio configuration for a client"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check access
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    client = await db.clients.find_one({"client_id": client_id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if config.account_sid:
+        update_dict["twilio_config.account_sid"] = encrypt_credential(config.account_sid)
+    if config.auth_token:
+        update_dict["twilio_config.auth_token"] = encrypt_credential(config.auth_token)
+    if config.whatsapp_from:
+        # Ensure whatsapp: prefix
+        whatsapp_from = config.whatsapp_from
+        if not whatsapp_from.startswith("whatsapp:"):
+            whatsapp_from = f"whatsapp:{whatsapp_from}"
+        update_dict["twilio_config.whatsapp_from"] = whatsapp_from
+    if config.whatsapp_numbers is not None:
+        # Clean numbers - remove whatsapp: prefix for storage
+        clean_numbers = []
+        for num in config.whatsapp_numbers:
+            clean_num = num.replace("whatsapp:", "").strip()
+            if clean_num and not clean_num.startswith("+"):
+                clean_num = f"+{clean_num}"
+            if clean_num:
+                clean_numbers.append(clean_num)
+        update_dict["twilio_config.whatsapp_numbers"] = clean_numbers
+    if config.enabled is not None:
+        update_dict["twilio_config.enabled"] = config.enabled
+    
+    await db.clients.update_one(
+        {"client_id": client_id},
+        {"$set": update_dict}
+    )
+    
+    logger.info(f"Twilio config updated for client {client_id}")
+    
+    return {"success": True, "message": "Twilio configuration updated"}
+
+
+@api_router.post("/alerts/twilio/{client_id}/test")
+async def test_twilio(request: Request, client_id: str, test_data: WhatsAppTestMessage):
+    """Send a test WhatsApp message"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check access
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    if not TWILIO_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Twilio library not installed")
+    
+    client = await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    twilio_config = client.get("twilio_config", {})
+    if not twilio_config.get("account_sid") or not twilio_config.get("auth_token"):
+        raise HTTPException(status_code=400, detail="Twilio not configured. Please save your Account SID and Auth Token first.")
+    
+    try:
+        account_sid = decrypt_credential(twilio_config["account_sid"])
+        auth_token = decrypt_credential(twilio_config["auth_token"])
+        whatsapp_from = twilio_config.get("whatsapp_from", "")
+        
+        if not whatsapp_from:
+            raise HTTPException(status_code=400, detail="WhatsApp 'From' number not configured")
+        
+        twilio_client = TwilioClient(account_sid, auth_token)
+        
+        # Format the to number
+        to_number = test_data.to_number.strip()
+        if not to_number.startswith("+"):
+            to_number = f"+{to_number}"
+        to_whatsapp = f"whatsapp:{to_number}"
+        
+        # Send test message
+        message = twilio_client.messages.create(
+            body=f"🛡️ SecureGuard AI Test Alert\n\n{test_data.message}\n\nTimestamp: {datetime.now(timezone.utc).isoformat()}",
+            from_=whatsapp_from,
+            to=to_whatsapp
+        )
+        
+        # Log the test
+        await db.alert_logs.insert_one({
+            "client_id": client_id,
+            "type": "whatsapp_test",
+            "to": to_number,
+            "message_sid": message.sid,
+            "status": message.status,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+        
+        logger.info(f"Test WhatsApp sent to {to_number}: {message.sid}")
+        
+        return {
+            "success": True,
+            "message_sid": message.sid,
+            "status": message.status,
+            "to": to_number
+        }
+        
+    except Exception as e:
+        logger.error(f"Twilio test failed: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to send message: {str(e)}")
+
+
+@api_router.delete("/alerts/twilio/{client_id}")
+async def delete_twilio_config(request: Request, client_id: str):
+    """Remove Twilio configuration for a client"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check access - admin only
+    if user.get("role") != UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    client = await db.clients.find_one({"client_id": client_id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    await db.clients.update_one(
+        {"client_id": client_id},
+        {
+            "$unset": {"twilio_config": ""},
+            "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}
+        }
+    )
+    
+    return {"success": True, "message": "Twilio configuration removed"}
+
+
+# ===========================================
+# EDGE DEVICE PROVISIONING
+# ===========================================
+
+@api_router.post("/admin/edge-devices/provision")
+async def provision_edge_device(request: Request, client_id: str, device_name: str = "Edge Device"):
+    """Generate credentials for new edge device"""
+    await require_admin(request)
+    
+    client = await get_client_by_id(client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    device_id = f"edge_{uuid.uuid4().hex[:12]}"
+    api_key = generate_api_key()
+    api_key_hash = hash_api_key(api_key)
+    
+    device = {
+        "device_id": device_id,
+        "client_id": client_id,
+        "device_name": device_name,
+        "api_key_hash": api_key_hash,
+        "is_active": True,
+        "status": "pending",
+        "cameras": [],
+        "last_heartbeat": None,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.edge_devices.insert_one(device)
+    
+    return {
+        "success": True,
+        "device_id": device_id,
+        "client_id": client_id,
+        "api_key": api_key,
+        "central_server_url": os.environ.get("CENTRAL_SERVER_URL", "https://your-server.com"),
+        "message": "Save these credentials! API key cannot be retrieved later."
+    }
+
+
+@api_router.get("/admin/edge-devices")
+async def list_edge_devices(request: Request, client_id: Optional[str] = None):
+    """List all edge devices"""
+    await require_admin(request)
+    
+    query = {}
+    if client_id:
+        query["client_id"] = client_id
+    
+    devices = await db.edge_devices.find(query, {"_id": 0, "api_key_hash": 0}).to_list(100)
+    
+    for device in devices:
+        client = await get_client_by_id(device["client_id"])
+        device["client_name"] = client["name"] if client else "Unknown"
+        
+        if device.get("last_heartbeat"):
+            try:
+                last_hb = datetime.fromisoformat(device["last_heartbeat"].replace("Z", "+00:00"))
+                device["is_online"] = (datetime.now(timezone.utc) - last_hb).seconds < 300
+            except:
+                device["is_online"] = False
+        else:
+            device["is_online"] = False
+    
+    return {"devices": devices}
+
+
+@api_router.put("/admin/edge-devices/{device_id}")
+async def update_edge_device(request: Request, device_id: str):
+    """Update an edge device"""
+    await require_admin(request)
+    
+    device = await db.edge_devices.find_one({"device_id": device_id})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    body = await request.json()
+    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if "device_name" in body:
+        update_dict["device_name"] = body["device_name"]
+    if "is_active" in body:
+        update_dict["is_active"] = body["is_active"]
+    
+    await db.edge_devices.update_one(
+        {"device_id": device_id},
+        {"$set": update_dict}
+    )
+    
+    return {"success": True, "message": "Device updated"}
+
+
+@api_router.delete("/admin/edge-devices/{device_id}")
+async def delete_edge_device(request: Request, device_id: str):
+    """Delete an edge device"""
+    await require_admin(request)
+    
+    device = await db.edge_devices.find_one({"device_id": device_id})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    await db.edge_devices.delete_one({"device_id": device_id})
+    
+    return {"success": True, "message": "Device deleted"}
+
+
+# ===========================================
+# EDGE DEVICE ROUTES (Called by edge devices)
+# ===========================================
+
+@api_router.get("/edge/config/{client_id}")
+async def get_edge_config(client_id: str, api_key: str):
+    """Get full configuration for edge device including cameras and AI settings"""
+    
+    if not await verify_edge_api_key(client_id, api_key):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    client = await get_client_by_id(client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Get all cameras for this client with RTSP URLs
+    cameras = await db.cameras.find(
+        {"client_id": client_id},
+        {"_id": 0}
+    ).to_list(100)
+    
+    # Get watchlist for this client
+    watchlist = await db.watchlist.find(
+        {"client_id": client_id},
+        {"_id": 0, "face_encoding": 1, "name": 1, "person_id": 1}
+    ).to_list(1000)
+    
+    # Get AI settings
+    ai_settings = client.get("ai_settings", {
+        "enable_yolo": True,
+        "enable_deepface": True,
+        "enable_pose": True,
+        "enable_gpt_analysis": client.get("subscription", {}).get("plan") in ["professional", "enterprise"],
+        "detection_sensitivity": "medium",
+        "threat_threshold": 0.6
+    })
+    
+    return {
+        "success": True,
+        "client_id": client_id,
+        "client_name": client.get("name"),
+        "cameras": cameras,
+        "watchlist": watchlist,
+        "ai_settings": ai_settings,
+        "alert_settings": client.get("settings", {}),
+        "subscription": {
+            "plan": client.get("subscription", {}).get("plan"),
+            "max_cameras": client.get("subscription", {}).get("max_cameras"),
+            "gpt_analysis": client.get("subscription", {}).get("plan") in ["professional", "enterprise"]
+        },
+        "config_version": client.get("updated_at", datetime.now(timezone.utc).isoformat())
+    }
+
+
+@api_router.post("/edge/register")
+async def register_edge_device(data: EdgeDeviceRegister):
+    """Edge device registration/first connection"""
+    
+    if not await verify_edge_api_key(data.client_id, data.api_key):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    await db.edge_devices.update_one(
+        {"client_id": data.client_id, "api_key_hash": hash_api_key(data.api_key)},
+        {
+            "$set": {
+                "device_name": data.device_name,
+                "device_ip": data.device_ip,
+                "status": "online",
+                "registered_at": datetime.now(timezone.utc).isoformat(),
+                "last_heartbeat": datetime.now(timezone.utc).isoformat()
+            }
+        }
+    )
+    
+    client = await get_client_by_id(data.client_id)
+    
+    return {
+        "success": True,
+        "message": "Device registered",
+        "config": client.get("settings", {}) if client else {}
+    }
+
+
+@api_router.post("/edge/heartbeat")
+async def edge_heartbeat(data: HeartbeatData):
+    """Edge device health check (called every 1-5 minutes)"""
+    
+    if not await verify_edge_api_key(data.client_id, data.api_key):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    await db.edge_devices.update_one(
+        {"device_id": data.device_id},
+        {
+            "$set": {
+                "status": data.status,
+                "cameras_online": data.cameras_online,
+                "cameras_total": data.cameras_total,
+                "cpu_usage": data.cpu_usage,
+                "memory_usage": data.memory_usage,
+                "last_incident_at": data.last_incident_at,
+                "last_heartbeat": datetime.now(timezone.utc).isoformat()
+            }
+        }
+    )
+    
+    client = await get_client_by_id(data.client_id)
+    
+    return {
+        "success": True,
+        "config_updated": False,
+        "config": client.get("settings", {}) if client else {}
+    }
+
+
+@api_router.post("/edge/incidents")
+async def upload_incident(data: IncidentUpload):
+    """Receive incident from edge device"""
+    
+    if not await verify_edge_api_key(data.client_id, data.api_key):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    incident = {
+        "id": data.incident_id,
+        "client_id": data.client_id,
+        "timestamp": data.timestamp,
+        "severity": data.severity,
+        "confidence": data.confidence,
+        "description": data.description,
+        "camera_id": data.camera_id,
+        "camera_name": data.camera_name,
+        "frame_thumbnail": data.frame_thumbnail,
+        "behaviors": data.behaviors,
+        "watchlist_match": data.watchlist_match,
+        "source": "edge_device",
+        "received_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.incidents.insert_one(incident)
+    
+    # Send alert if configured
+    client = await get_client_by_id(data.client_id)
+    if client:
+        settings = client.get("settings", {})
+        should_alert = (
+            (data.severity == "critical" and settings.get("alert_on_critical", True)) or
+            (data.severity == "warning" and settings.get("alert_on_warning", False))
+        )
+        if should_alert:
+            logger.info(f"Alert triggered for client {data.client_id}: {data.description}")
+    
+    return {"success": True, "incident_id": data.incident_id}
+
+
+# ===========================================
+# USER PROFILE ROUTES
+# ===========================================
+
+class ProfileUpdate(BaseModel):
+    name: Optional[str] = None
+
+
+@api_router.put("/users/{user_id}/profile")
+async def update_user_profile(request: Request, user_id: str, data: ProfileUpdate):
+    """Update user profile"""
+    user = await require_auth(request)
+    
+    # Users can only update their own profile (unless super admin)
+    if user.get("user_id") != user_id and user.get("role") != UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    update_dict = {"updated_at": datetime.now(timezone.utc)}
+    
+    if data.name:
+        update_dict["name"] = data.name
+    
+    result = await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": update_dict}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return {"success": True, "message": "Profile updated"}
+
+
+# ===========================================
+# ADMIN SYSTEM SETTINGS ROUTES
+# ===========================================
+
+class SystemSettingsUpdate(BaseModel):
+    maintenance_mode: Optional[bool] = None
+    allow_new_registrations: Optional[bool] = None
+    require_email_verification: Optional[bool] = None
+    session_timeout_days: Optional[int] = None
+    max_login_attempts: Optional[int] = None
+
+
+class NotificationSettingsUpdate(BaseModel):
+    email_on_critical_incident: Optional[bool] = None
+    email_on_new_client: Optional[bool] = None
+    email_on_device_offline: Optional[bool] = None
+    daily_summary_email: Optional[bool] = None
+
+
+@api_router.get("/admin/system/settings")
+async def get_admin_system_settings(request: Request):
+    """Get admin system settings"""
+    await require_admin(request)
+    
+    settings = await db.system_settings.find_one({"type": "system"}, {"_id": 0})
+    
+    if not settings:
+        settings = {
+            "maintenance_mode": False,
+            "allow_new_registrations": True,
+            "require_email_verification": False,
+            "session_timeout_days": 7,
+            "max_login_attempts": 5
+        }
+    
+    return settings
+
+
+@api_router.put("/admin/system/settings")
+async def update_admin_system_settings(request: Request, data: SystemSettingsUpdate):
+    """Update admin system settings"""
+    await require_admin(request)
+    
+    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if data.maintenance_mode is not None:
+        update_dict["maintenance_mode"] = data.maintenance_mode
+    if data.allow_new_registrations is not None:
+        update_dict["allow_new_registrations"] = data.allow_new_registrations
+    if data.require_email_verification is not None:
+        update_dict["require_email_verification"] = data.require_email_verification
+    if data.session_timeout_days is not None:
+        update_dict["session_timeout_days"] = data.session_timeout_days
+    if data.max_login_attempts is not None:
+        update_dict["max_login_attempts"] = data.max_login_attempts
+    
+    await db.system_settings.update_one(
+        {"type": "system"},
+        {"$set": update_dict},
+        upsert=True
+    )
+    
+    return {"success": True, "message": "System settings updated"}
+
+
+@api_router.get("/admin/notifications/settings")
+async def get_admin_notification_settings(request: Request):
+    """Get admin notification settings"""
+    user = await require_admin(request)
+    
+    settings = await db.admin_notification_settings.find_one(
+        {"user_id": user["user_id"]}, 
+        {"_id": 0}
+    )
+    
+    if not settings:
+        settings = {
+            "email_on_critical_incident": True,
+            "email_on_new_client": True,
+            "email_on_device_offline": True,
+            "daily_summary_email": False
+        }
+    
+    return settings
+
+
+@api_router.put("/admin/notifications/settings")
+async def update_admin_notification_settings(request: Request, data: NotificationSettingsUpdate):
+    """Update admin notification settings"""
+    user = await require_admin(request)
+    
+    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if data.email_on_critical_incident is not None:
+        update_dict["email_on_critical_incident"] = data.email_on_critical_incident
+    if data.email_on_new_client is not None:
+        update_dict["email_on_new_client"] = data.email_on_new_client
+    if data.email_on_device_offline is not None:
+        update_dict["email_on_device_offline"] = data.email_on_device_offline
+    if data.daily_summary_email is not None:
+        update_dict["daily_summary_email"] = data.daily_summary_email
+    
+    await db.admin_notification_settings.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": update_dict},
+        upsert=True
+    )
+    
+    return {"success": True, "message": "Notification settings updated"}
+
+
+# ===========================================
+# CLIENT DASHBOARD ROUTES
+# ===========================================
+
+class ClientDetectionSettings(BaseModel):
+    sensitivity: Optional[str] = None
+    enable_pose_detection: Optional[bool] = None
+    enable_face_recognition: Optional[bool] = None
+    enable_gpt_analysis: Optional[bool] = None
+    confidence_threshold: Optional[float] = None
+
+
+@api_router.get("/client/detection-settings/{client_id}")
+async def get_client_detection_settings(request: Request, client_id: str):
+    """Get detection settings for a client"""
+    user = await require_auth(request)
+    
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    client = await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    ai_settings = client.get("ai_settings", {})
+    
+    return {
+        "client_id": client_id,
+        "sensitivity": ai_settings.get("detection_sensitivity", "medium"),
+        "enable_pose_detection": ai_settings.get("enable_pose", True),
+        "enable_face_recognition": ai_settings.get("enable_deepface", True),
+        "enable_gpt_analysis": ai_settings.get("enable_gpt_analysis", True),
+        "confidence_threshold": ai_settings.get("threat_threshold", 0.6)
+    }
+
+
+@api_router.put("/client/detection-settings/{client_id}")
+async def update_client_detection_settings(request: Request, client_id: str, data: ClientDetectionSettings):
+    """Update detection settings for a client"""
+    user = await require_auth(request)
+    
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    client = await db.clients.find_one({"client_id": client_id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if data.sensitivity is not None:
+        update_dict["ai_settings.detection_sensitivity"] = data.sensitivity
+        update_dict["settings.detection_sensitivity"] = data.sensitivity
+    if data.enable_pose_detection is not None:
+        update_dict["ai_settings.enable_pose"] = data.enable_pose_detection
+    if data.enable_face_recognition is not None:
+        update_dict["ai_settings.enable_deepface"] = data.enable_face_recognition
+    if data.enable_gpt_analysis is not None:
+        update_dict["ai_settings.enable_gpt_analysis"] = data.enable_gpt_analysis
+    if data.confidence_threshold is not None:
+        update_dict["ai_settings.threat_threshold"] = data.confidence_threshold
+    
+    await db.clients.update_one(
+        {"client_id": client_id},
+        {"$set": update_dict}
+    )
+    
+    return {"success": True, "message": "Detection settings updated"}
+
+
+@api_router.get("/dashboard/stats")
+async def get_client_dashboard_stats(request: Request, client_id: str):
+    """Get stats for client dashboard"""
+    user = await require_auth(request)
+    
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    total_incidents = await db.incidents.count_documents({"client_id": client_id})
+    yesterday = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    incidents_24h = await db.incidents.count_documents({
+        "client_id": client_id,
+        "timestamp": {"$gte": yesterday}
+    })
+    
+    critical = await db.incidents.count_documents({"client_id": client_id, "severity": "critical"})
+    warning = await db.incidents.count_documents({"client_id": client_id, "severity": "warning"})
+    
+    devices = await db.edge_devices.count_documents({"client_id": client_id})
+    online = await db.edge_devices.count_documents({
+        "client_id": client_id,
+        "last_heartbeat": {"$gte": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()}
+    })
+    
+    cameras = await db.cameras.count_documents({"client_id": client_id})
+    
+    client = await get_client_by_id(client_id)
+    
+    return {
+        "total_incidents": total_incidents,
+        "incidents_24h": incidents_24h,
+        "critical_incidents": critical,
+        "warning_incidents": warning,
+        "edge_devices": devices,
+        "online_devices": online,
+        "cameras": cameras,
+        "settings": client.get("settings", {}) if client else {},
+        "plan": client.get("subscription", {}).get("plan") if client else None,
+        "updated_at": client.get("updated_at") if client else None
+    }
+
+
+@api_router.get("/dashboard/incidents")
+async def get_client_incidents(request: Request, client_id: str, limit: int = 50):
+    """Get incidents for a specific client"""
+    user = await require_auth(request)
+    
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    incidents = await db.incidents.find(
+        {"client_id": client_id},
+        {"_id": 0, "frame_image": 0}
+    ).sort("timestamp", -1).limit(limit).to_list(limit)
+    
+    return {"incidents": incidents}
+
+
+# ===========================================
+# MAIN
+# ===========================================
+
+app.include_router(api_router)
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "service": "central-server",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+# Static file serving for React frontend
+# Build frontend first, then mount the build directory
+BUILD_DIR = Path(__file__).parent / "frontend" / "build"
+
+if BUILD_DIR.exists():
+    app.mount("/static", StaticFiles(directory=BUILD_DIR / "static"), name="static")
+    
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        """Serve React frontend for all non-API routes"""
+        # Don't serve frontend for API routes
+        if full_path.startswith("api/") or full_path == "health":
+            raise HTTPException(status_code=404, detail="Not found")
+        
+        file_path = BUILD_DIR / full_path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+        
+        # Return index.html for client-side routing
+        return FileResponse(BUILD_DIR / "index.html")
+else:
+    logger.warning(f"Frontend build directory not found at {BUILD_DIR}")
+    logger.info("To serve the frontend, build it and place in ./frontend/build/")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8001)
