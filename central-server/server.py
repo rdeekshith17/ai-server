@@ -404,6 +404,65 @@ def generate_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def encrypt_credential(credential: str) -> str:
+    """Simple encryption for storing credentials (use proper encryption in production)"""
+    # In production, use proper encryption like Fernet
+    import base64
+    return base64.b64encode(credential.encode()).decode()
+
+
+def decrypt_credential(encrypted: str) -> str:
+    """Decrypt stored credential"""
+    import base64
+    return base64.b64decode(encrypted.encode()).decode()
+
+
+async def send_whatsapp_alert(client_id: str, message: str, to_numbers: List[str] = None) -> Dict:
+    """Send WhatsApp alert via Twilio"""
+    if not TWILIO_AVAILABLE:
+        return {"success": False, "error": "Twilio not installed"}
+    
+    # Get client's Twilio config
+    client = await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+    if not client:
+        return {"success": False, "error": "Client not found"}
+    
+    twilio_config = client.get("twilio_config", {})
+    if not twilio_config.get("enabled"):
+        return {"success": False, "error": "Twilio not configured"}
+    
+    try:
+        account_sid = decrypt_credential(twilio_config["account_sid"])
+        auth_token = decrypt_credential(twilio_config["auth_token"])
+        whatsapp_from = twilio_config["whatsapp_from"]
+        
+        twilio_client = TwilioClient(account_sid, auth_token)
+        
+        numbers = to_numbers or twilio_config.get("whatsapp_numbers", [])
+        results = []
+        
+        for number in numbers:
+            try:
+                # Ensure number has whatsapp: prefix
+                to_number = f"whatsapp:{number}" if not number.startswith("whatsapp:") else number
+                
+                msg = twilio_client.messages.create(
+                    body=message,
+                    from_=whatsapp_from,
+                    to=to_number
+                )
+                results.append({"number": number, "status": "sent", "sid": msg.sid})
+                logger.info(f"WhatsApp sent to {number}: {msg.sid}")
+            except Exception as e:
+                results.append({"number": number, "status": "failed", "error": str(e)})
+                logger.error(f"WhatsApp failed to {number}: {e}")
+        
+        return {"success": True, "results": results}
+    except Exception as e:
+        logger.error(f"Twilio error: {e}")
+        return {"success": False, "error": str(e)}
+
+
 async def verify_edge_api_key(client_id: str, api_key: str) -> bool:
     """Verify edge device API key"""
     hashed = hash_api_key(api_key)
