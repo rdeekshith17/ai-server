@@ -2150,6 +2150,150 @@ async def upload_incident(data: IncidentUpload):
 
 
 # ===========================================
+# USER PROFILE ROUTES
+# ===========================================
+
+class ProfileUpdate(BaseModel):
+    name: Optional[str] = None
+
+
+@api_router.put("/users/{user_id}/profile")
+async def update_user_profile(request: Request, user_id: str, data: ProfileUpdate):
+    """Update user profile"""
+    user = await require_auth(request)
+    
+    # Users can only update their own profile (unless super admin)
+    if user.get("user_id") != user_id and user.get("role") != UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    update_dict = {"updated_at": datetime.now(timezone.utc)}
+    
+    if data.name:
+        update_dict["name"] = data.name
+    
+    result = await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": update_dict}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return {"success": True, "message": "Profile updated"}
+
+
+# ===========================================
+# ADMIN SYSTEM SETTINGS ROUTES
+# ===========================================
+
+class SystemSettingsUpdate(BaseModel):
+    maintenance_mode: Optional[bool] = None
+    allow_new_registrations: Optional[bool] = None
+    require_email_verification: Optional[bool] = None
+    session_timeout_days: Optional[int] = None
+    max_login_attempts: Optional[int] = None
+
+
+class NotificationSettingsUpdate(BaseModel):
+    email_on_critical_incident: Optional[bool] = None
+    email_on_new_client: Optional[bool] = None
+    email_on_device_offline: Optional[bool] = None
+    daily_summary_email: Optional[bool] = None
+
+
+@api_router.get("/admin/system/settings")
+async def get_admin_system_settings(request: Request):
+    """Get admin system settings"""
+    await require_admin(request)
+    
+    settings = await db.system_settings.find_one({"type": "system"}, {"_id": 0})
+    
+    if not settings:
+        settings = {
+            "maintenance_mode": False,
+            "allow_new_registrations": True,
+            "require_email_verification": False,
+            "session_timeout_days": 7,
+            "max_login_attempts": 5
+        }
+    
+    return settings
+
+
+@api_router.put("/admin/system/settings")
+async def update_admin_system_settings(request: Request, data: SystemSettingsUpdate):
+    """Update admin system settings"""
+    await require_admin(request)
+    
+    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if data.maintenance_mode is not None:
+        update_dict["maintenance_mode"] = data.maintenance_mode
+    if data.allow_new_registrations is not None:
+        update_dict["allow_new_registrations"] = data.allow_new_registrations
+    if data.require_email_verification is not None:
+        update_dict["require_email_verification"] = data.require_email_verification
+    if data.session_timeout_days is not None:
+        update_dict["session_timeout_days"] = data.session_timeout_days
+    if data.max_login_attempts is not None:
+        update_dict["max_login_attempts"] = data.max_login_attempts
+    
+    await db.system_settings.update_one(
+        {"type": "system"},
+        {"$set": update_dict},
+        upsert=True
+    )
+    
+    return {"success": True, "message": "System settings updated"}
+
+
+@api_router.get("/admin/notifications/settings")
+async def get_admin_notification_settings(request: Request):
+    """Get admin notification settings"""
+    user = await require_admin(request)
+    
+    settings = await db.admin_notification_settings.find_one(
+        {"user_id": user["user_id"]}, 
+        {"_id": 0}
+    )
+    
+    if not settings:
+        settings = {
+            "email_on_critical_incident": True,
+            "email_on_new_client": True,
+            "email_on_device_offline": True,
+            "daily_summary_email": False
+        }
+    
+    return settings
+
+
+@api_router.put("/admin/notifications/settings")
+async def update_admin_notification_settings(request: Request, data: NotificationSettingsUpdate):
+    """Update admin notification settings"""
+    user = await require_admin(request)
+    
+    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if data.email_on_critical_incident is not None:
+        update_dict["email_on_critical_incident"] = data.email_on_critical_incident
+    if data.email_on_new_client is not None:
+        update_dict["email_on_new_client"] = data.email_on_new_client
+    if data.email_on_device_offline is not None:
+        update_dict["email_on_device_offline"] = data.email_on_device_offline
+    if data.daily_summary_email is not None:
+        update_dict["daily_summary_email"] = data.daily_summary_email
+    
+    await db.admin_notification_settings.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": update_dict},
+        upsert=True
+    )
+    
+    return {"success": True, "message": "Notification settings updated"}
+
+
+# ===========================================
 # CLIENT DASHBOARD ROUTES
 # ===========================================
 
