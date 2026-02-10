@@ -59,6 +59,8 @@ export default function AdminSettings() {
 
   useEffect(() => {
     fetchSystemHealth();
+    fetchSystemSettings();
+    fetchNotificationSettings();
   }, []);
 
   const fetchSystemHealth = async () => {
@@ -70,6 +72,45 @@ export default function AdminSettings() {
       setSystemHealth(response.data);
     } catch (error) {
       console.error("Failed to fetch system health:", error);
+    }
+  };
+
+  const fetchSystemSettings = async () => {
+    try {
+      const response = await axios.get(`${API}/admin/system/settings`, {
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
+      if (response.data) {
+        setSystemSettings({
+          maintenanceMode: response.data.maintenance_mode ?? false,
+          allowNewRegistrations: response.data.allow_new_registrations ?? true,
+          requireEmailVerification: response.data.require_email_verification ?? false,
+          sessionTimeoutDays: response.data.session_timeout_days ?? 7,
+          maxLoginAttempts: response.data.max_login_attempts ?? 5
+        });
+      }
+    } catch (error) {
+      console.error("Failed to fetch system settings:", error);
+    }
+  };
+
+  const fetchNotificationSettings = async () => {
+    try {
+      const response = await axios.get(`${API}/admin/notifications/settings`, {
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
+      if (response.data) {
+        setNotifications({
+          emailOnCriticalIncident: response.data.email_on_critical_incident ?? true,
+          emailOnNewClient: response.data.email_on_new_client ?? true,
+          emailOnDeviceOffline: response.data.email_on_device_offline ?? true,
+          dailySummaryEmail: response.data.daily_summary_email ?? false
+        });
+      }
+    } catch (error) {
+      console.error("Failed to fetch notification settings:", error);
     }
   };
 
