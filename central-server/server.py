@@ -354,6 +354,25 @@ class HeartbeatData(BaseModel):
     last_incident_at: Optional[str] = None
 
 
+class TwilioConfig(BaseModel):
+    account_sid: str
+    auth_token: str
+    whatsapp_from: str  # e.g., "whatsapp:+14155238886"
+
+
+class TwilioConfigUpdate(BaseModel):
+    account_sid: Optional[str] = None
+    auth_token: Optional[str] = None
+    whatsapp_from: Optional[str] = None
+    whatsapp_numbers: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+
+
+class WhatsAppTestMessage(BaseModel):
+    to_number: str  # e.g., "+919876543210"
+    message: Optional[str] = "Test alert from SecureGuard AI"
+
+
 # ===========================================
 # HELPER FUNCTIONS
 # ===========================================
