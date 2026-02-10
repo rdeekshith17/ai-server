@@ -76,11 +76,20 @@ export default function AdminSettings() {
   const handleSaveProfile = async () => {
     setSaving(true);
     try {
-      // In a real app, this would call an API endpoint
-      await new Promise(resolve => setTimeout(resolve, 500));
-      toast.success("Profile updated successfully");
+      const response = await axios.put(`${API}/users/${user.user_id}/profile`, {
+        name: profile.name
+      }, {
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
+      
+      if (response.data.success) {
+        toast.success("Profile updated successfully");
+      } else {
+        toast.error(response.data.message || "Failed to update profile");
+      }
     } catch (error) {
-      toast.error("Failed to update profile");
+      toast.error(error.response?.data?.detail || "Failed to update profile");
     } finally {
       setSaving(false);
     }
@@ -89,10 +98,24 @@ export default function AdminSettings() {
   const handleSaveSystem = async () => {
     setSaving(true);
     try {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      toast.success("System settings updated");
+      const response = await axios.put(`${API}/admin/system/settings`, {
+        maintenance_mode: systemSettings.maintenanceMode,
+        allow_new_registrations: systemSettings.allowNewRegistrations,
+        require_email_verification: systemSettings.requireEmailVerification,
+        session_timeout_days: systemSettings.sessionTimeoutDays,
+        max_login_attempts: systemSettings.maxLoginAttempts
+      }, {
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
+      
+      if (response.data.success) {
+        toast.success("System settings updated");
+      } else {
+        toast.error(response.data.message || "Failed to update system settings");
+      }
     } catch (error) {
-      toast.error("Failed to update system settings");
+      toast.error(error.response?.data?.detail || "Failed to update system settings");
     } finally {
       setSaving(false);
     }
@@ -101,10 +124,23 @@ export default function AdminSettings() {
   const handleSaveNotifications = async () => {
     setSaving(true);
     try {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      toast.success("Notification settings updated");
+      const response = await axios.put(`${API}/admin/notifications/settings`, {
+        email_on_critical_incident: notifications.emailOnCriticalIncident,
+        email_on_new_client: notifications.emailOnNewClient,
+        email_on_device_offline: notifications.emailOnDeviceOffline,
+        daily_summary_email: notifications.dailySummaryEmail
+      }, {
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
+      
+      if (response.data.success) {
+        toast.success("Notification settings updated");
+      } else {
+        toast.error(response.data.message || "Failed to update notification settings");
+      }
     } catch (error) {
-      toast.error("Failed to update notification settings");
+      toast.error(error.response?.data?.detail || "Failed to update notification settings");
     } finally {
       setSaving(false);
     }
