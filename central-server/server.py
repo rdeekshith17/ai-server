@@ -7,7 +7,7 @@ This server handles:
 - Client/user management
 - Edge device registration & provisioning
 - Incident storage from edge devices
-- WhatsApp alert notifications
+- WhatsApp alert notifications (Twilio)
 - Billing & subscriptions
 - Static frontend serving
 
@@ -31,6 +31,14 @@ import secrets
 import logging
 import httpx
 from pathlib import Path
+
+# Twilio for WhatsApp
+try:
+    from twilio.rest import Client as TwilioClient
+    TWILIO_AVAILABLE = True
+except ImportError:
+    TWILIO_AVAILABLE = False
+    logger.warning("Twilio not installed. WhatsApp alerts will be disabled.")
 
 load_dotenv()
 
