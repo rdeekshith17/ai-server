@@ -101,34 +101,89 @@ export default function ClientSettings() {
   const handleSaveProfile = async () => {
     setSaving(true);
     try {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      toast.success("Profile updated successfully");
+      const response = await axios.put(`${API}/users/${user.user_id}/profile`, {
+        name: profile.name
+      }, {
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
+      
+      if (response.data.success) {
+        toast.success("Profile updated successfully");
+      } else {
+        toast.error(response.data.message || "Failed to update profile");
+      }
     } catch (error) {
-      toast.error("Failed to update profile");
+      toast.error(error.response?.data?.detail || "Failed to update profile");
     } finally {
       setSaving(false);
     }
   };
 
   const handleSaveDetection = async () => {
+    if (!user?.client_id) {
+      toast.error("No client associated with your account");
+      return;
+    }
+    
     setSaving(true);
     try {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      toast.success("Detection settings updated");
+      const response = await axios.put(`${API}/client/detection-settings/${user.client_id}`, {
+        sensitivity: detection.sensitivity,
+        enable_pose_detection: detection.enablePoseDetection,
+        enable_face_recognition: detection.enableFaceRecognition,
+        enable_gpt_analysis: detection.enableGptAnalysis,
+        confidence_threshold: detection.confidenceThreshold
+      }, {
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
+      
+      if (response.data.success) {
+        toast.success("Detection settings updated");
+      } else {
+        toast.error(response.data.message || "Failed to update detection settings");
+      }
     } catch (error) {
-      toast.error("Failed to update detection settings");
+      toast.error(error.response?.data?.detail || "Failed to update detection settings");
     } finally {
       setSaving(false);
     }
   };
 
   const handleSaveAlerts = async () => {
+    if (!user?.client_id) {
+      toast.error("No client associated with your account");
+      return;
+    }
+    
     setSaving(true);
     try {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      toast.success("Alert settings updated");
+      const payload = {
+        alert_on_critical: alerts.alertOnCritical,
+        alert_on_warning: alerts.alertOnWarning,
+        alert_email: alerts.emailAlerts
+      };
+      
+      // Add WhatsApp number if enabled
+      if (alerts.whatsappAlerts && alerts.whatsappNumber) {
+        payload.whatsapp_numbers = [alerts.whatsappNumber];
+      } else {
+        payload.whatsapp_numbers = [];
+      }
+      
+      const response = await axios.put(`${API}/alerts/settings/${user.client_id}`, payload, {
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
+      
+      if (response.data.success) {
+        toast.success("Alert settings updated");
+      } else {
+        toast.error(response.data.message || "Failed to update alert settings");
+      }
     } catch (error) {
-      toast.error("Failed to update alert settings");
+      toast.error(error.response?.data?.detail || "Failed to update alert settings");
     } finally {
       setSaving(false);
     }
