@@ -2297,6 +2297,72 @@ async def update_admin_notification_settings(request: Request, data: Notificatio
 # CLIENT DASHBOARD ROUTES
 # ===========================================
 
+class ClientDetectionSettings(BaseModel):
+    sensitivity: Optional[str] = None
+    enable_pose_detection: Optional[bool] = None
+    enable_face_recognition: Optional[bool] = None
+    enable_gpt_analysis: Optional[bool] = None
+    confidence_threshold: Optional[float] = None
+
+
+@api_router.get("/client/detection-settings/{client_id}")
+async def get_client_detection_settings(request: Request, client_id: str):
+    """Get detection settings for a client"""
+    user = await require_auth(request)
+    
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    client = await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    ai_settings = client.get("ai_settings", {})
+    
+    return {
+        "client_id": client_id,
+        "sensitivity": ai_settings.get("detection_sensitivity", "medium"),
+        "enable_pose_detection": ai_settings.get("enable_pose", True),
+        "enable_face_recognition": ai_settings.get("enable_deepface", True),
+        "enable_gpt_analysis": ai_settings.get("enable_gpt_analysis", True),
+        "confidence_threshold": ai_settings.get("threat_threshold", 0.6)
+    }
+
+
+@api_router.put("/client/detection-settings/{client_id}")
+async def update_client_detection_settings(request: Request, client_id: str, data: ClientDetectionSettings):
+    """Update detection settings for a client"""
+    user = await require_auth(request)
+    
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    client = await db.clients.find_one({"client_id": client_id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if data.sensitivity is not None:
+        update_dict["ai_settings.detection_sensitivity"] = data.sensitivity
+        update_dict["settings.detection_sensitivity"] = data.sensitivity
+    if data.enable_pose_detection is not None:
+        update_dict["ai_settings.enable_pose"] = data.enable_pose_detection
+    if data.enable_face_recognition is not None:
+        update_dict["ai_settings.enable_deepface"] = data.enable_face_recognition
+    if data.enable_gpt_analysis is not None:
+        update_dict["ai_settings.enable_gpt_analysis"] = data.enable_gpt_analysis
+    if data.confidence_threshold is not None:
+        update_dict["ai_settings.threat_threshold"] = data.confidence_threshold
+    
+    await db.clients.update_one(
+        {"client_id": client_id},
+        {"$set": update_dict}
+    )
+    
+    return {"success": True, "message": "Detection settings updated"}
+
+
 @api_router.get("/dashboard/stats")
 async def get_client_dashboard_stats(request: Request, client_id: str):
     """Get stats for client dashboard"""
