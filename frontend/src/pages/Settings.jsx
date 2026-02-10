@@ -65,6 +65,7 @@ export default function ClientSettings() {
   useEffect(() => {
     if (user?.client_id) {
       fetchSettings();
+      fetchDetectionSettings();
     } else {
       setLoading(false);
     }
@@ -72,29 +73,46 @@ export default function ClientSettings() {
 
   const fetchSettings = async () => {
     try {
-      const response = await axios.get(`${API}/dashboard/stats?client_id=${user.client_id}`, {
+      // Fetch alert settings
+      const alertResponse = await axios.get(`${API}/alerts/settings/${user.client_id}`, {
         withCredentials: true,
         headers: getAuthHeaders()
       });
       
-      if (response.data.settings) {
-        const settings = response.data.settings;
+      if (alertResponse.data) {
         setAlerts({
-          alertOnCritical: settings.alert_on_critical ?? true,
-          alertOnWarning: settings.alert_on_warning ?? false,
-          emailAlerts: settings.alert_email ?? true,
-          whatsappAlerts: settings.whatsapp_numbers?.length > 0,
-          whatsappNumber: settings.whatsapp_numbers?.[0] || ""
-        });
-        setDetection({
-          ...detection,
-          sensitivity: settings.detection_sensitivity || "medium"
+          alertOnCritical: alertResponse.data.alert_on_critical ?? true,
+          alertOnWarning: alertResponse.data.alert_on_warning ?? false,
+          emailAlerts: alertResponse.data.alert_email ?? true,
+          whatsappAlerts: alertResponse.data.whatsapp_numbers?.length > 0,
+          whatsappNumber: alertResponse.data.whatsapp_numbers?.[0] || ""
         });
       }
     } catch (error) {
-      console.error("Failed to fetch settings:", error);
+      console.error("Failed to fetch alert settings:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchDetectionSettings = async () => {
+    try {
+      const response = await axios.get(`${API}/client/detection-settings/${user.client_id}`, {
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
+      
+      if (response.data) {
+        setDetection({
+          sensitivity: response.data.sensitivity || "medium",
+          enablePoseDetection: response.data.enable_pose_detection ?? true,
+          enableFaceRecognition: response.data.enable_face_recognition ?? true,
+          enableGptAnalysis: response.data.enable_gpt_analysis ?? true,
+          confidenceThreshold: response.data.confidence_threshold ?? 0.6
+        });
+      }
+    } catch (error) {
+      console.error("Failed to fetch detection settings:", error);
     }
   };
 
