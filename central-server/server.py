@@ -1704,6 +1704,192 @@ async def get_alert_log(request: Request, client_id: str, limit: int = 50):
 
 
 # ===========================================
+# TWILIO / WHATSAPP CONFIGURATION
+# ===========================================
+
+@api_router.get("/alerts/twilio/{client_id}")
+async def get_twilio_config(request: Request, client_id: str):
+    """Get Twilio configuration for a client (credentials masked)"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check access
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    client = await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    twilio_config = client.get("twilio_config", {})
+    
+    # Mask sensitive data
+    account_sid = twilio_config.get("account_sid", "")
+    if account_sid:
+        try:
+            decrypted = decrypt_credential(account_sid)
+            account_sid = decrypted[:8] + "****" + decrypted[-4:] if len(decrypted) > 12 else "****"
+        except:
+            account_sid = "****configured****"
+    
+    return {
+        "client_id": client_id,
+        "configured": bool(twilio_config.get("account_sid")),
+        "enabled": twilio_config.get("enabled", False),
+        "account_sid_masked": account_sid,
+        "whatsapp_from": twilio_config.get("whatsapp_from", ""),
+        "whatsapp_numbers": twilio_config.get("whatsapp_numbers", []),
+        "twilio_available": TWILIO_AVAILABLE
+    }
+
+
+@api_router.put("/alerts/twilio/{client_id}")
+async def update_twilio_config(request: Request, client_id: str, config: TwilioConfigUpdate):
+    """Update Twilio configuration for a client"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check access
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    client = await db.clients.find_one({"client_id": client_id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if config.account_sid:
+        update_dict["twilio_config.account_sid"] = encrypt_credential(config.account_sid)
+    if config.auth_token:
+        update_dict["twilio_config.auth_token"] = encrypt_credential(config.auth_token)
+    if config.whatsapp_from:
+        # Ensure whatsapp: prefix
+        whatsapp_from = config.whatsapp_from
+        if not whatsapp_from.startswith("whatsapp:"):
+            whatsapp_from = f"whatsapp:{whatsapp_from}"
+        update_dict["twilio_config.whatsapp_from"] = whatsapp_from
+    if config.whatsapp_numbers is not None:
+        # Clean numbers - remove whatsapp: prefix for storage
+        clean_numbers = []
+        for num in config.whatsapp_numbers:
+            clean_num = num.replace("whatsapp:", "").strip()
+            if clean_num and not clean_num.startswith("+"):
+                clean_num = f"+{clean_num}"
+            if clean_num:
+                clean_numbers.append(clean_num)
+        update_dict["twilio_config.whatsapp_numbers"] = clean_numbers
+    if config.enabled is not None:
+        update_dict["twilio_config.enabled"] = config.enabled
+    
+    await db.clients.update_one(
+        {"client_id": client_id},
+        {"$set": update_dict}
+    )
+    
+    logger.info(f"Twilio config updated for client {client_id}")
+    
+    return {"success": True, "message": "Twilio configuration updated"}
+
+
+@api_router.post("/alerts/twilio/{client_id}/test")
+async def test_twilio(request: Request, client_id: str, test_data: WhatsAppTestMessage):
+    """Send a test WhatsApp message"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check access
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    if not TWILIO_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Twilio library not installed")
+    
+    client = await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    twilio_config = client.get("twilio_config", {})
+    if not twilio_config.get("account_sid") or not twilio_config.get("auth_token"):
+        raise HTTPException(status_code=400, detail="Twilio not configured. Please save your Account SID and Auth Token first.")
+    
+    try:
+        account_sid = decrypt_credential(twilio_config["account_sid"])
+        auth_token = decrypt_credential(twilio_config["auth_token"])
+        whatsapp_from = twilio_config.get("whatsapp_from", "")
+        
+        if not whatsapp_from:
+            raise HTTPException(status_code=400, detail="WhatsApp 'From' number not configured")
+        
+        twilio_client = TwilioClient(account_sid, auth_token)
+        
+        # Format the to number
+        to_number = test_data.to_number.strip()
+        if not to_number.startswith("+"):
+            to_number = f"+{to_number}"
+        to_whatsapp = f"whatsapp:{to_number}"
+        
+        # Send test message
+        message = twilio_client.messages.create(
+            body=f"🛡️ SecureGuard AI Test Alert\n\n{test_data.message}\n\nTimestamp: {datetime.now(timezone.utc).isoformat()}",
+            from_=whatsapp_from,
+            to=to_whatsapp
+        )
+        
+        # Log the test
+        await db.alert_logs.insert_one({
+            "client_id": client_id,
+            "type": "whatsapp_test",
+            "to": to_number,
+            "message_sid": message.sid,
+            "status": message.status,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+        
+        logger.info(f"Test WhatsApp sent to {to_number}: {message.sid}")
+        
+        return {
+            "success": True,
+            "message_sid": message.sid,
+            "status": message.status,
+            "to": to_number
+        }
+        
+    except Exception as e:
+        logger.error(f"Twilio test failed: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to send message: {str(e)}")
+
+
+@api_router.delete("/alerts/twilio/{client_id}")
+async def delete_twilio_config(request: Request, client_id: str):
+    """Remove Twilio configuration for a client"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check access - admin only
+    if user.get("role") != UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    client = await db.clients.find_one({"client_id": client_id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    await db.clients.update_one(
+        {"client_id": client_id},
+        {
+            "$unset": {"twilio_config": ""},
+            "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}
+        }
+    )
+    
+    return {"success": True, "message": "Twilio configuration removed"}
+
+
+# ===========================================
 # EDGE DEVICE PROVISIONING
 # ===========================================
 
