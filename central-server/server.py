@@ -1389,6 +1389,234 @@ async def get_recent_incidents_all(request: Request, limit: int = 20):
     return {"incidents": incidents}
 
 
+@api_router.get("/incidents")
+async def get_incidents(
+    request: Request,
+    client_id: Optional[str] = None,
+    severity: Optional[str] = None,
+    limit: int = 50,
+    skip: int = 0
+):
+    """Get incidents - accessible by authenticated users"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    query = {}
+    
+    # Non-admin users can only see their client's incidents
+    if user.get("role") != UserRole.SUPER_ADMIN:
+        if user.get("client_id"):
+            query["client_id"] = user["client_id"]
+        else:
+            return {"incidents": [], "total": 0}
+    elif client_id:
+        query["client_id"] = client_id
+    
+    if severity:
+        query["severity"] = severity
+    
+    incidents = await db.incidents.find(
+        query,
+        {"_id": 0, "frame_image": 0}
+    ).sort("timestamp", -1).skip(skip).limit(limit).to_list(limit)
+    
+    total = await db.incidents.count_documents(query)
+    
+    return {"incidents": incidents, "total": total, "limit": limit, "skip": skip}
+
+
+# ===========================================
+# ML STATUS
+# ===========================================
+
+@api_router.get("/ml/status")
+async def get_ml_status(request: Request):
+    """Get ML model status - models run on edge devices"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # In the central/edge architecture, ML models run on edge devices
+    # This endpoint returns the status of connected edge devices with ML capabilities
+    
+    query = {}
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id"):
+        query["client_id"] = user["client_id"]
+    
+    # Get edge devices and their ML status
+    edge_devices = await db.edge_devices.find(query, {"_id": 0, "api_key_hash": 0}).to_list(100)
+    
+    online_devices = [d for d in edge_devices if d.get("is_online") or 
+                      (d.get("last_heartbeat") and 
+                       (datetime.now(timezone.utc) - datetime.fromisoformat(d["last_heartbeat"].replace("Z", "+00:00"))).seconds < 300)]
+    
+    return {
+        "status": "operational" if online_devices else "no_devices",
+        "architecture": "edge_processing",
+        "message": "ML models run on edge devices at client locations",
+        "models": {
+            "yolo": {"name": "YOLOv8", "status": "available", "location": "edge_device"},
+            "pose": {"name": "YOLO Pose", "status": "available", "location": "edge_device"},
+            "deepface": {"name": "DeepFace", "status": "available", "location": "edge_device"},
+            "gpt_vision": {"name": "GPT-5.2 Vision", "status": "available", "location": "edge_device"}
+        },
+        "edge_devices": {
+            "total": len(edge_devices),
+            "online": len(online_devices)
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+# ===========================================
+# ALERTS
+# ===========================================
+
+@api_router.get("/alerts/status")
+async def get_alerts_status(request: Request):
+    """Get alerts system status"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    query = {}
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id"):
+        query["client_id"] = user["client_id"]
+    
+    # Count recent alerts
+    yesterday = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    
+    if query:
+        total_24h = await db.incidents.count_documents({**query, "timestamp": {"$gte": yesterday}})
+        critical_24h = await db.incidents.count_documents({**query, "timestamp": {"$gte": yesterday}, "severity": "critical"})
+        warning_24h = await db.incidents.count_documents({**query, "timestamp": {"$gte": yesterday}, "severity": "warning"})
+    else:
+        total_24h = await db.incidents.count_documents({"timestamp": {"$gte": yesterday}})
+        critical_24h = await db.incidents.count_documents({"timestamp": {"$gte": yesterday}, "severity": "critical"})
+        warning_24h = await db.incidents.count_documents({"timestamp": {"$gte": yesterday}, "severity": "warning"})
+    
+    return {
+        "status": "active",
+        "channels": {
+            "email": True,
+            "whatsapp": True,
+            "dashboard": True,
+            "push": True
+        },
+        "alerts_24h": {
+            "total": total_24h,
+            "critical": critical_24h,
+            "warning": warning_24h
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@api_router.get("/alerts/settings/{client_id}")
+async def get_alert_settings(request: Request, client_id: str):
+    """Get alert settings for a client"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check access
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    client = await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    settings = client.get("settings", {})
+    
+    return {
+        "client_id": client_id,
+        "alert_on_critical": settings.get("alert_on_critical", True),
+        "alert_on_warning": settings.get("alert_on_warning", False),
+        "alert_email": settings.get("alert_email", True),
+        "email_recipients": settings.get("email_recipients", []),
+        "whatsapp_enabled": len(settings.get("whatsapp_numbers", [])) > 0,
+        "whatsapp_numbers": settings.get("whatsapp_numbers", []),
+        "detection_sensitivity": settings.get("detection_sensitivity", "medium"),
+        "auto_incident_creation": settings.get("auto_incident_creation", True)
+    }
+
+
+@api_router.put("/alerts/settings/{client_id}")
+async def update_alert_settings(request: Request, client_id: str):
+    """Update alert settings for a client"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check access
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    client = await db.clients.find_one({"client_id": client_id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    body = await request.json()
+    
+    update_dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if "alert_on_critical" in body:
+        update_dict["settings.alert_on_critical"] = body["alert_on_critical"]
+    if "alert_on_warning" in body:
+        update_dict["settings.alert_on_warning"] = body["alert_on_warning"]
+    if "alert_email" in body:
+        update_dict["settings.alert_email"] = body["alert_email"]
+    if "email_recipients" in body:
+        update_dict["settings.email_recipients"] = body["email_recipients"]
+    if "whatsapp_numbers" in body:
+        update_dict["settings.whatsapp_numbers"] = body["whatsapp_numbers"]
+    if "detection_sensitivity" in body:
+        update_dict["settings.detection_sensitivity"] = body["detection_sensitivity"]
+    if "auto_incident_creation" in body:
+        update_dict["settings.auto_incident_creation"] = body["auto_incident_creation"]
+    
+    await db.clients.update_one(
+        {"client_id": client_id},
+        {"$set": update_dict}
+    )
+    
+    return {"success": True, "message": "Alert settings updated"}
+
+
+@api_router.get("/alerts/log/{client_id}")
+async def get_alert_log(request: Request, client_id: str, limit: int = 50):
+    """Get alert log for a client"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Check access
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Get recent incidents/alerts for this client
+    alerts = await db.incidents.find(
+        {"client_id": client_id},
+        {"_id": 0, "frame_image": 0, "frame_thumbnail": 0}
+    ).sort("timestamp", -1).limit(limit).to_list(limit)
+    
+    # Also check for alert_logs collection if it exists
+    alert_logs = await db.alert_logs.find(
+        {"client_id": client_id},
+        {"_id": 0}
+    ).sort("timestamp", -1).limit(limit).to_list(limit)
+    
+    return {
+        "client_id": client_id,
+        "alerts": alerts,
+        "notification_logs": alert_logs,
+        "total_alerts": len(alerts),
+        "total_notifications": len(alert_logs)
+    }
+
+
 # ===========================================
 # EDGE DEVICE PROVISIONING
 # ===========================================
