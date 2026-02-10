@@ -2000,6 +2000,56 @@ async def delete_edge_device(request: Request, device_id: str):
 # EDGE DEVICE ROUTES (Called by edge devices)
 # ===========================================
 
+@api_router.get("/edge/config/{client_id}")
+async def get_edge_config(client_id: str, api_key: str):
+    """Get full configuration for edge device including cameras and AI settings"""
+    
+    if not await verify_edge_api_key(client_id, api_key):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    client = await get_client_by_id(client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Get all cameras for this client with RTSP URLs
+    cameras = await db.cameras.find(
+        {"client_id": client_id},
+        {"_id": 0}
+    ).to_list(100)
+    
+    # Get watchlist for this client
+    watchlist = await db.watchlist.find(
+        {"client_id": client_id},
+        {"_id": 0, "face_encoding": 1, "name": 1, "person_id": 1}
+    ).to_list(1000)
+    
+    # Get AI settings
+    ai_settings = client.get("ai_settings", {
+        "enable_yolo": True,
+        "enable_deepface": True,
+        "enable_pose": True,
+        "enable_gpt_analysis": client.get("subscription", {}).get("plan") in ["professional", "enterprise"],
+        "detection_sensitivity": "medium",
+        "threat_threshold": 0.6
+    })
+    
+    return {
+        "success": True,
+        "client_id": client_id,
+        "client_name": client.get("name"),
+        "cameras": cameras,
+        "watchlist": watchlist,
+        "ai_settings": ai_settings,
+        "alert_settings": client.get("settings", {}),
+        "subscription": {
+            "plan": client.get("subscription", {}).get("plan"),
+            "max_cameras": client.get("subscription", {}).get("max_cameras"),
+            "gpt_analysis": client.get("subscription", {}).get("plan") in ["professional", "enterprise"]
+        },
+        "config_version": client.get("updated_at", datetime.now(timezone.utc).isoformat())
+    }
+
+
 @api_router.post("/edge/register")
 async def register_edge_device(data: EdgeDeviceRegister):
     """Edge device registration/first connection"""
