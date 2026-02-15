@@ -37,6 +37,8 @@ const statusColors = {
 export default function LiveCameras() {
   const { user } = useAuth();
   const [snapshots, setSnapshots] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [selectedClientId, setSelectedClientId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [selectedCamera, setSelectedCamera] = useState(null);
