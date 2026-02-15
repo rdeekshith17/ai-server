@@ -889,24 +889,26 @@ class EdgeProcessor:
     async def create_incident(self, camera: CameraStream, frame: np.ndarray, 
                             detections: List, poses: List, gpt_result: Dict,
                             watchlist_match: Optional[Dict] = None) -> Dict:
-        """Create and upload incident"""
+        """Create and upload CRITICAL shoplifting incident"""
         
-        # Generate thumbnail with detection boxes
+        # Generate thumbnail with detection boxes (RED for shoplifters)
         annotated_frame = frame.copy()
         for det in detections:
             x1, y1, x2, y2 = det["bbox"]
-            color = (0, 0, 255) if det.get("watchlist_match") else (0, 255, 0)
-            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
+            # Red box for all - this is a shoplifting incident
+            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+            cv2.putText(annotated_frame, "SHOPLIFTER", (x1, y1-10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         
-        _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
         thumbnail = base64.b64encode(buffer).decode('utf-8')
         
         incident = {
             "incident_id": f"inc_{uuid.uuid4().hex[:12]}",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "severity": gpt_result.get("threat_level", "warning"),
-            "confidence": gpt_result.get("confidence", 0.7),
-            "description": gpt_result.get("description", "Suspicious activity detected"),
+            "severity": "critical",  # ALWAYS CRITICAL
+            "confidence": gpt_result.get("confidence", 0.8),
+            "description": gpt_result.get("description", "Shoplifting detected"),
             "camera_id": camera.camera_id,
             "camera_name": camera.name,
             "frame_thumbnail": thumbnail,
