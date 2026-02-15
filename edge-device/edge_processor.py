@@ -714,7 +714,7 @@ class CentralServerSync:
 
 
 class EdgeProcessor:
-    """Main edge device processor"""
+    """Main edge device processor - SHOPLIFTING ONLY"""
     
     def __init__(self):
         self.sync = CentralServerSync(CENTRAL_SERVER_URL, CLIENT_ID, API_KEY)
@@ -725,8 +725,6 @@ class EdgeProcessor:
         self.is_running = True
         self.detection_count = 0
         self.incident_count = 0
-        # Track suspicious activity over time (for multi-frame confirmation)
-        self.suspicious_tracker: Dict[str, Dict] = {}  # camera_id -> {count, last_seen, behaviors}
         
     async def initialize(self):
         """Initialize edge processor"""
