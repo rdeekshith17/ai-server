@@ -51,6 +51,7 @@ function AppRouter() {
         <Route index element={<Dashboard />} />
         <Route path="upload" element={<VideoUpload />} />
         <Route path="live" element={<LiveFeed />} />
+        <Route path="cameras" element={<LiveCameras />} />
         <Route path="watchlist" element={<Watchlist />} />
         <Route path="incidents" element={<Incidents />} />
         <Route path="analytics" element={<Analytics />} />
