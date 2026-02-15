@@ -42,15 +42,20 @@ API_KEY = os.environ.get("API_KEY", "")
 DEVICE_NAME = os.environ.get("DEVICE_NAME", "Edge-Device-001")
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 
-DETECTION_INTERVAL = float(os.environ.get("DETECTION_INTERVAL", "1.0"))
-CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.5"))  # Lowered for more detections
+DETECTION_INTERVAL = float(os.environ.get("DETECTION_INTERVAL", "0.2"))  # 5 FPS processing
+CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.3"))  # Lower for more detections
 ENABLE_POSE = os.environ.get("ENABLE_POSE_DETECTION", "true").lower() == "true"
 ENABLE_FACE = os.environ.get("ENABLE_FACE_RECOGNITION", "true").lower() == "true"
 ENABLE_GPT = os.environ.get("ENABLE_GPT_ANALYSIS", "true").lower() == "true"
 
+# Shoplifting detection settings
+INCIDENT_COOLDOWN = int(os.environ.get("INCIDENT_COOLDOWN_SECONDS", "30"))  # Don't spam incidents
+SUSPICIOUS_POSE_THRESHOLD = float(os.environ.get("SUSPICIOUS_POSE_THRESHOLD", "0.4"))
+CREATE_TEST_INCIDENTS = os.environ.get("CREATE_TEST_INCIDENTS", "false").lower() == "true"
+
 SYNC_INTERVAL = int(os.environ.get("SYNC_INTERVAL_SECONDS", "60"))
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", "60"))
-SNAPSHOT_INTERVAL = int(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "5"))  # For live view
+SNAPSHOT_INTERVAL = float(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "1"))  # 1 FPS live view
 MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MAX_RECONNECT_ATTEMPTS", "10"))
 RECONNECT_DELAY = int(os.environ.get("RECONNECT_DELAY_SECONDS", "5"))
 
