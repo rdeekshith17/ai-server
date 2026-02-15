@@ -1504,7 +1504,7 @@ async def get_incidents(
     
     incidents = await db.incidents.find(
         query,
-        {"_id": 0, "frame_image": 0}
+        {"_id": 0, "frame_image": 0}  # Exclude large frame_image but keep frame_thumbnail
     ).sort("timestamp", -1).skip(skip).limit(limit).to_list(limit)
     
     total = await db.incidents.count_documents(query)
