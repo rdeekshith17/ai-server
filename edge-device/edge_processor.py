@@ -525,17 +525,17 @@ class GPTAnalyzer:
     def __init__(self):
         self.enabled = ENABLE_GPT and EMERGENT_LLM_KEY
         self.last_analysis_time = 0
-        self.min_analysis_interval = 3.0  # Don't analyze too frequently
+        self.min_analysis_interval = 5.0  # 5 seconds between GPT calls
         
     async def analyze_scene(self, frame: np.ndarray, detections: List[Dict]) -> Dict:
-        """Analyze scene with GPT Vision for threat assessment"""
+        """Analyze scene with GPT Vision - ONLY detect actual shoplifting"""
         if not self.enabled:
-            return {"analyzed": False, "threat_level": "unknown"}
+            return {"analyzed": False, "threat_level": "safe"}
         
         # Rate limit
         now = time.time()
         if now - self.last_analysis_time < self.min_analysis_interval:
-            return {"analyzed": False, "threat_level": "unknown", "reason": "rate_limited"}
+            return {"analyzed": False, "threat_level": "safe", "reason": "rate_limited"}
         
         try:
             from emergentintegrations.llm.openai import chat_completion_with_image
@@ -544,29 +544,37 @@ class GPTAnalyzer:
             _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
             img_base64 = base64.b64encode(buffer).decode('utf-8')
             
-            prompt = f"""Analyze this retail store security camera image for potential shoplifting behavior.
+            prompt = f"""You are a shoplifting detection AI for a retail store security camera.
 
-There are {len(detections)} people detected in the frame.
+IMPORTANT: Only report CRITICAL if you see ACTUAL SHOPLIFTING IN PROGRESS. 
+Do NOT report normal shopping behavior, staff restocking, or customers browsing.
 
-Look for these suspicious behaviors:
-1. Concealment - hiding items in clothing, bags, or pockets
-2. Nervous behavior - looking around frequently, avoiding staff
-3. Unusual browsing - staying too long in one area, handling items excessively
-4. Group distraction - one person distracting while another takes items
-5. Bag/jacket stuffing - putting items in personal bags or clothing
-6. Price tag tampering
-7. Quick grab and movement toward exit
+There are {len(detections)} people in the frame.
 
-Response Format (JSON):
+ONLY flag as CRITICAL (shoplifting) if you see:
+1. Person ACTIVELY hiding/concealing merchandise in clothing, bag, or pocket
+2. Person removing security tags
+3. Person stuffing items into bag/jacket while looking around nervously
+4. Person walking toward exit with concealed unpaid items
+5. Known shoplifting technique (bag switching, ticket switching, etc.)
+
+DO NOT flag as critical:
+- Normal shopping/browsing
+- Staff restocking shelves
+- Customers looking at products
+- People with hands in their own pockets (without merchandise)
+- People bending down to look at lower shelves
+
+Response Format (JSON only):
 {{
-  "threat_level": "safe" | "warning" | "critical",
+  "is_shoplifting": true/false,
   "confidence": 0.0-1.0,
-  "description": "Brief description of what you see",
-  "behaviors_detected": ["list", "of", "suspicious", "behaviors"],
-  "recommended_action": "suggestion for security staff"
+  "description": "What exactly you see happening",
+  "evidence": ["specific", "evidence", "of", "theft"]
 }}
 
-Respond ONLY with the JSON object, no other text."""
+Be VERY strict. Only is_shoplifting=true if you are confident theft is occurring.
+Respond ONLY with JSON, no other text."""
 
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
@@ -584,10 +592,23 @@ Respond ONLY with the JSON object, no other text."""
             if response and response.content:
                 content = response.content.strip()
                 # Extract JSON from response
-                if content.startswith("{"):
-                    result = json.loads(content)
-                    result["analyzed"] = True
-                    return result
+                if "{" in content:
+                    # Find JSON in response
+                    start = content.find("{")
+                    end = content.rfind("}") + 1
+                    json_str = content[start:end]
+                    result = json.loads(json_str)
+                    
+                    # Convert to our format
+                    is_shoplifting = result.get("is_shoplifting", False)
+                    return {
+                        "analyzed": True,
+                        "threat_level": "critical" if is_shoplifting else "safe",
+                        "confidence": result.get("confidence", 0.5),
+                        "description": result.get("description", ""),
+                        "behaviors_detected": result.get("evidence", []),
+                        "is_shoplifting": is_shoplifting
+                    }
             
             return {"analyzed": False, "threat_level": "unknown"}
             
