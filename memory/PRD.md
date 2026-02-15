@@ -67,7 +67,19 @@ Build a shoplifting detection system for liquor stores, convenience stores and g
 - [x] Admin Notification Settings - per-admin preferences
 - [x] Client Detection Settings - sensitivity, pose, face, GPT analysis
 - [x] Client Alert Settings - email, WhatsApp notifications
-- [x] Twilio WhatsApp integration (backend ready, UI done)
+- [x] Twilio WhatsApp integration (backend ready)
+
+### Phase 5: Live Cameras & Edge Improvements ✅ (February 15, 2026)
+- [x] **Live Cameras Page** - Real-time camera feed display with health metrics
+- [x] **Snapshot API** - Edge devices upload periodic snapshots
+- [x] **Stream Health Monitoring** - FPS, frame drops, decode errors, reconnects
+- [x] **Robust RTSP Error Handling** - Graceful frame skipping, auto-reconnect
+- [x] **Exponential Backoff Reconnection** - Up to 10 attempts with increasing delays
+- [x] **Edge Device Improvements**:
+  - Improved pose analysis for suspicious behavior detection
+  - Rate-limited GPT analysis to avoid overuse
+  - Local incident caching for offline operation
+  - Health metrics sent with heartbeat
 
 ---
 
@@ -80,7 +92,7 @@ Build a shoplifting detection system for liquor stores, convenience stores and g
 - `GET /api/auth/me` - Get current user
 - `POST /api/auth/logout` - Logout
 
-### Settings (NEW)
+### Settings
 - `PUT /api/users/{user_id}/profile` - Update user profile
 - `GET /api/admin/system/settings` - Get system settings
 - `PUT /api/admin/system/settings` - Update system settings
@@ -94,8 +106,13 @@ Build a shoplifting detection system for liquor stores, convenience stores and g
 ### Edge Device
 - `GET /api/edge/config/{client_id}` - Get full config including cameras with RTSP URLs
 - `POST /api/edge/register` - Register edge device
-- `POST /api/edge/heartbeat` - Send health data
+- `POST /api/edge/heartbeat` - Send health data including stream metrics
 - `POST /api/edge/incidents` - Upload detected incidents
+- `POST /api/edge/snapshots` - Upload camera snapshots for live view
+
+### Live View (NEW)
+- `GET /api/live/snapshots/{client_id}` - Get latest camera snapshots
+- `GET /api/live/snapshot/{camera_id}` - Get specific camera snapshot
 
 ### Admin
 - `GET /api/admin/dashboard/stats` - Dashboard statistics
@@ -117,11 +134,11 @@ Build a shoplifting detection system for liquor stores, convenience stores and g
 ## Prioritized Backlog
 
 ### P0 - Critical
-- [ ] Test edge device RTSP connection to real cameras
+- [ ] Test edge device with real RTSP cameras at client site
 
 ### P1 - High Priority
 - [ ] Refactor `server.py` (2000+ lines) into modules (routes/, models/, services/)
-- [ ] Code cleanup: Remove deprecated `/app/backend.old` files
+- [ ] Code cleanup: Remove deprecated old files
 - [ ] Frontend lint warnings fix (useEffect dependencies)
 
 ### P2 - Medium Priority
@@ -141,17 +158,18 @@ Build a shoplifting detection system for liquor stores, convenience stores and g
 ## Files Structure
 ```
 /app/
-├── backend/           # Central server (copies from central-server)
+├── backend/           # Central server (main server.py)
 │   ├── server.py      # Monolithic API (to be refactored)
 │   ├── tests/         # Pytest tests
 │   └── requirements.txt
-├── central-server/    # Original central server code
+├── central-server/    # Original central server code (reference)
 ├── edge-device/       # On-premise ML processor
-│   ├── edge_processor.py
+│   ├── edge_processor.py  # UPDATED with robust RTSP handling
 │   └── requirements.txt
 ├── frontend/          # React app
 │   └── src/
 │       ├── pages/
+│       │   ├── LiveCameras.jsx  # NEW - Live camera feeds
 │       │   ├── admin/  # Admin pages
 │       │   └── Settings.jsx  # Client settings
 │       └── context/
@@ -161,6 +179,18 @@ Build a shoplifting detection system for liquor stores, convenience stores and g
 ---
 
 ## Change Log
+
+### February 15, 2026
+- Added **Live Cameras** page with real-time snapshot display
+- Added `POST /api/edge/snapshots` endpoint for edge devices to upload camera frames
+- Added `GET /api/live/snapshots/{client_id}` endpoint to fetch camera snapshots
+- Updated edge processor with:
+  - Robust RTSP error handling (skip corrupted frames)
+  - Automatic reconnection with exponential backoff
+  - Stream health metrics (FPS, drops, errors)
+  - Periodic snapshot uploads for live view
+- Improved detection sensitivity (lowered confidence threshold)
+- Added client selector for admin users on Live Cameras page
 
 ### February 10, 2026
 - Fixed all settings save buttons (Profile, Detection, Alerts, System, Notifications)
