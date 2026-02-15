@@ -8,6 +8,7 @@ import Incidents from "./pages/Incidents";
 import Analytics from "./pages/Analytics";
 import Watchlist from "./pages/Watchlist";
 import LiveFeed from "./pages/LiveFeed";
+import LiveCameras from "./pages/LiveCameras";
 import Login from "./pages/Login";
 import AuthCallback from "./pages/AuthCallback";
 import Settings from "./pages/Settings";
