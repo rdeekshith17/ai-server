@@ -42,35 +42,34 @@ API_KEY = os.environ.get("API_KEY", "")
 DEVICE_NAME = os.environ.get("DEVICE_NAME", "Edge-Device-001")
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 
-# Processing settings - balanced for stability
-DETECTION_INTERVAL = float(os.environ.get("DETECTION_INTERVAL", "0.5"))  # 2 FPS processing (more stable)
-CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.5"))  # Higher = fewer false positives
-ENABLE_POSE = os.environ.get("ENABLE_POSE_DETECTION", "true").lower() == "true"
+# Processing settings - STABLE configuration
+DETECTION_INTERVAL = float(os.environ.get("DETECTION_INTERVAL", "1.0"))  # 1 FPS (very stable)
+CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.6"))  # Higher = fewer detections
+ENABLE_POSE = False  # DISABLED - not needed for shoplifting detection
 ENABLE_FACE = os.environ.get("ENABLE_FACE_RECOGNITION", "true").lower() == "true"
 ENABLE_GPT = os.environ.get("ENABLE_GPT_ANALYSIS", "true").lower() == "true"
 
-# Shoplifting detection settings - STRICTER to avoid false positives
-INCIDENT_COOLDOWN = int(os.environ.get("INCIDENT_COOLDOWN_SECONDS", "60"))  # 1 minute between incidents per camera
-MIN_SUSPICIOUS_FRAMES = int(os.environ.get("MIN_SUSPICIOUS_FRAMES", "3"))  # Require 3 suspicious frames before incident
-REQUIRE_GPT_CONFIRMATION = os.environ.get("REQUIRE_GPT_CONFIRMATION", "true").lower() == "true"  # Only GPT can create incidents
+# Shoplifting detection - GPT ONLY
+INCIDENT_COOLDOWN = int(os.environ.get("INCIDENT_COOLDOWN_SECONDS", "120"))  # 2 minutes between incidents
+GPT_ANALYSIS_INTERVAL = int(os.environ.get("GPT_ANALYSIS_INTERVAL", "10"))  # Only run GPT every 10 seconds
 
-# Staff filtering - to ignore employees
-STAFF_DETECTION_ENABLED = os.environ.get("STAFF_DETECTION_ENABLED", "false").lower() == "true"
-STAFF_ZONES = os.environ.get("STAFF_ZONES", "")  # Comma-separated zones to ignore (e.g., "behind_counter,stockroom")
-
+# Streaming settings
 SYNC_INTERVAL = int(os.environ.get("SYNC_INTERVAL_SECONDS", "60"))
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", "60"))
-SNAPSHOT_INTERVAL = float(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "2"))  # 0.5 FPS live view (more stable)
-MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MAX_RECONNECT_ATTEMPTS", "100"))  # More attempts before giving up
-RECONNECT_DELAY = int(os.environ.get("RECONNECT_DELAY_SECONDS", "10"))  # Wait longer between reconnects
-MAX_DECODE_ERRORS = int(os.environ.get("MAX_DECODE_ERRORS", "100"))  # More tolerance for decode errors
+SNAPSHOT_INTERVAL = float(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "3"))  # Snapshot every 3 seconds
 
-# Logging
+# RTSP Stability - VERY TOLERANT
+MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MAX_RECONNECT_ATTEMPTS", "999"))  # Never give up
+RECONNECT_DELAY = int(os.environ.get("RECONNECT_DELAY_SECONDS", "30"))  # Wait 30s between reconnects
+MAX_DECODE_ERRORS = int(os.environ.get("MAX_DECODE_ERRORS", "1000"))  # Very tolerant of errors
+
+# Logging - reduce noise
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,  # Only warnings and errors
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("EdgeDevice")
+logger.setLevel(logging.INFO)  # But keep our logger at INFO
 
 # Local database for offline cache
 db_path = Path("./data")
@@ -525,56 +524,49 @@ class GPTAnalyzer:
     def __init__(self):
         self.enabled = ENABLE_GPT and EMERGENT_LLM_KEY
         self.last_analysis_time = 0
-        self.min_analysis_interval = 5.0  # 5 seconds between GPT calls
+        self.min_analysis_interval = GPT_ANALYSIS_INTERVAL  # From config (default 10 seconds)
         
     async def analyze_scene(self, frame: np.ndarray, detections: List[Dict]) -> Dict:
         """Analyze scene with GPT Vision - ONLY detect actual shoplifting"""
         if not self.enabled:
-            return {"analyzed": False, "threat_level": "safe"}
+            return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
         
-        # Rate limit
+        # Rate limit - only analyze every N seconds
         now = time.time()
         if now - self.last_analysis_time < self.min_analysis_interval:
-            return {"analyzed": False, "threat_level": "safe", "reason": "rate_limited"}
+            return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False, "reason": "rate_limited"}
         
         try:
             from emergentintegrations.llm.openai import chat_completion_with_image
             
             # Encode frame
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
             img_base64 = base64.b64encode(buffer).decode('utf-8')
             
-            prompt = f"""You are a shoplifting detection AI for a retail store security camera.
+            prompt = f"""You are a shoplifting detection AI. Analyze this security camera image.
 
-IMPORTANT: Only report CRITICAL if you see ACTUAL SHOPLIFTING IN PROGRESS. 
-Do NOT report normal shopping behavior, staff restocking, or customers browsing.
+NUMBER OF PEOPLE: {len(detections)}
 
-There are {len(detections)} people in the frame.
+⚠️ CRITICAL: Only return is_shoplifting=true if you see ACTUAL THEFT HAPPENING RIGHT NOW.
 
-ONLY flag as CRITICAL (shoplifting) if you see:
-1. Person ACTIVELY hiding/concealing merchandise in clothing, bag, or pocket
-2. Person removing security tags
-3. Person stuffing items into bag/jacket while looking around nervously
-4. Person walking toward exit with concealed unpaid items
-5. Known shoplifting technique (bag switching, ticket switching, etc.)
+SHOPLIFTING (return is_shoplifting=true):
+- Person putting store merchandise into their bag/pocket/clothing
+- Person concealing items under jacket
+- Person removing security tags
+- Person walking to exit with hidden items
 
-DO NOT flag as critical:
-- Normal shopping/browsing
-- Staff restocking shelves
-- Customers looking at products
-- People with hands in their own pockets (without merchandise)
-- People bending down to look at lower shelves
+NOT SHOPLIFTING (return is_shoplifting=false):
+- Normal shopping or browsing
+- Staff working/restocking
+- Customer examining products
+- Person with hands in their own empty pockets
+- Customer carrying store basket/cart
 
-Response Format (JSON only):
-{{
-  "is_shoplifting": true/false,
-  "confidence": 0.0-1.0,
-  "description": "What exactly you see happening",
-  "evidence": ["specific", "evidence", "of", "theft"]
-}}
+JSON Response only:
+{{"is_shoplifting": false, "confidence": 0.0, "description": "what you see"}}
 
-Be VERY strict. Only is_shoplifting=true if you are confident theft is occurring.
-Respond ONLY with JSON, no other text."""
+or if theft:
+{{"is_shoplifting": true, "confidence": 0.9, "description": "specific theft action", "evidence": ["what you saw"]}}"""
 
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
@@ -591,15 +583,12 @@ Respond ONLY with JSON, no other text."""
             # Parse response
             if response and response.content:
                 content = response.content.strip()
-                # Extract JSON from response
                 if "{" in content:
-                    # Find JSON in response
                     start = content.find("{")
                     end = content.rfind("}") + 1
                     json_str = content[start:end]
                     result = json.loads(json_str)
                     
-                    # Convert to our format
                     is_shoplifting = result.get("is_shoplifting", False)
                     return {
                         "analyzed": True,
@@ -725,7 +714,7 @@ class CentralServerSync:
 
 
 class EdgeProcessor:
-    """Main edge device processor"""
+    """Main edge device processor - SHOPLIFTING ONLY"""
     
     def __init__(self):
         self.sync = CentralServerSync(CENTRAL_SERVER_URL, CLIENT_ID, API_KEY)
@@ -736,8 +725,6 @@ class EdgeProcessor:
         self.is_running = True
         self.detection_count = 0
         self.incident_count = 0
-        # Track suspicious activity over time (for multi-frame confirmation)
-        self.suspicious_tracker: Dict[str, Dict] = {}  # camera_id -> {count, last_seen, behaviors}
         
     async def initialize(self):
         """Initialize edge processor"""
@@ -827,64 +814,57 @@ class EdgeProcessor:
         logger.info(f"Camera setup complete: {sum(1 for c in self.cameras.values() if c.is_running)}/{len(self.cameras)} connected")
     
     async def process_frame(self, camera: CameraStream, frame: np.ndarray):
-        """Process frame - ONLY detect actual shoplifting (CRITICAL only)"""
+        """Process frame - ONLY GPT-confirmed shoplifting (CRITICAL only)"""
         
-        # Step 1: Detect persons
+        # Step 1: Detect persons (just to know if anyone is in frame)
         detections = self.detector.detect_persons(frame)
         self.detection_count += 1
         
         if not detections:
-            return None  # No persons detected
+            return None  # No one in frame
         
-        # Step 2: Check watchlist (CRITICAL - always flag known shoplifters)
-        watchlist_match = None
-        for det in detections:
-            match = self.detector.check_watchlist(frame, det["bbox"])
-            if match:
-                det["watchlist_match"] = match
-                watchlist_match = match
-                logger.warning(f"🚨 WATCHLIST MATCH: {match.get('name')}")
+        # Step 2: Check watchlist (CRITICAL - known shoplifters)
+        if ENABLE_FACE:
+            for det in detections:
+                match = self.detector.check_watchlist(frame, det["bbox"])
+                if match:
+                    logger.warning(f"🚨 WATCHLIST MATCH: {match.get('name')}")
+                    return await self._create_incident_if_allowed(
+                        camera, frame, detections,
+                        {
+                            "analyzed": False,
+                            "threat_level": "critical",
+                            "confidence": 0.95,
+                            "description": f"Known shoplifter: {match.get('name', 'Unknown')}",
+                            "behaviors_detected": ["watchlist_match"],
+                            "is_shoplifting": True
+                        },
+                        match
+                    )
         
-        # If watchlist match - immediate CRITICAL incident
-        if watchlist_match:
-            return await self._create_incident_if_allowed(
-                camera, frame, detections, [],
-                {
-                    "analyzed": False,
-                    "threat_level": "critical",
-                    "confidence": 0.95,
-                    "description": f"Known shoplifter detected: {watchlist_match.get('name', 'Unknown')}",
-                    "behaviors_detected": ["watchlist_match"],
-                    "is_shoplifting": True
-                },
-                watchlist_match
-            )
-        
-        # Step 3: Use GPT to detect actual shoplifting (required)
+        # Step 3: GPT Analysis (only way to detect new shoplifters)
         if not ENABLE_GPT:
-            return None  # Without GPT, we can't reliably detect shoplifting
+            return None
         
-        # Only analyze with GPT periodically (not every frame)
         gpt_result = await self.gpt_analyzer.analyze_scene(frame, detections)
         
-        # Only create incident if GPT confirms SHOPLIFTING
-        if gpt_result.get("is_shoplifting") == True and gpt_result.get("threat_level") == "critical":
-            logger.warning(f"🚨 SHOPLIFTING DETECTED: {gpt_result.get('description', '')[:100]}")
-            return await self._create_incident_if_allowed(camera, frame, detections, [], gpt_result, None)
+        # Only create incident if GPT confirms ACTUAL SHOPLIFTING
+        if gpt_result.get("is_shoplifting") == True:
+            logger.warning(f"🚨 SHOPLIFTING: {gpt_result.get('description', '')[:80]}")
+            return await self._create_incident_if_allowed(camera, frame, detections, gpt_result, None)
         
         return None
     
-    async def _create_incident_if_allowed(self, camera, frame, detections, poses, gpt_result, watchlist_match):
+    async def _create_incident_if_allowed(self, camera, frame, detections, gpt_result, watchlist_match):
         """Create CRITICAL incident if cooldown allows"""
         current_time = time.time()
         camera_last_incident = getattr(camera, 'last_incident_time', 0)
         
         if current_time - camera_last_incident < INCIDENT_COOLDOWN:
-            logger.debug(f"Incident cooldown active for {camera.name}")
-            return None
+            return None  # Cooldown active
         
         camera.last_incident_time = current_time
-        return await self.create_incident(camera, frame, detections, poses, gpt_result, watchlist_match)
+        return await self.create_incident(camera, frame, detections, [], gpt_result, watchlist_match)
     
     async def create_incident(self, camera: CameraStream, frame: np.ndarray, 
                             detections: List, poses: List, gpt_result: Dict,
