@@ -44,6 +44,9 @@ export default function LiveCameras() {
   const refreshRef = useRef(null);
 
   useEffect(() => {
+    if (user?.role === 'super_admin') {
+      fetchClients();
+    }
     fetchSnapshots();
     
     return () => {
@@ -51,10 +54,10 @@ export default function LiveCameras() {
         clearInterval(refreshRef.current);
       }
     };
-  }, []);
+  }, [user]);
 
   useEffect(() => {
-    if (autoRefresh) {
+    if (autoRefresh && (user?.client_id || selectedClientId)) {
       refreshRef.current = setInterval(fetchSnapshots, refreshInterval);
     } else {
       if (refreshRef.current) {
@@ -67,10 +70,31 @@ export default function LiveCameras() {
         clearInterval(refreshRef.current);
       }
     };
-  }, [autoRefresh, refreshInterval]);
+  }, [autoRefresh, refreshInterval, selectedClientId, user?.client_id]);
+
+  const fetchClients = async () => {
+    try {
+      const response = await axios.get(`${API}/api/admin/clients`, {
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
+      if (response.data.clients) {
+        setClients(response.data.clients);
+        if (response.data.clients.length > 0 && !selectedClientId) {
+          setSelectedClientId(response.data.clients[0].client_id);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to fetch clients:", error);
+    }
+  };
 
   const fetchSnapshots = async () => {
-    if (!user?.client_id) return;
+    const clientId = user?.client_id || selectedClientId;
+    if (!clientId) {
+      setLoading(false);
+      return;
+    }
     
     try {
       const response = await axios.get(`${API}/api/live/snapshots/${user.client_id}`, {
