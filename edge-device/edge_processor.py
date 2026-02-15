@@ -370,7 +370,7 @@ class MLDetector:
             return []
     
     def _analyze_pose(self, keypoints: List) -> str:
-        """Analyze pose keypoints for suspicious behavior"""
+        """Analyze pose keypoints for suspicious behavior - MORE SENSITIVE"""
         if len(keypoints) < 17:
             return "unknown"
         
@@ -378,27 +378,74 @@ class MLDetector:
             # COCO keypoint indices
             # 0: nose, 5: left_shoulder, 6: right_shoulder, 
             # 9: left_wrist, 10: right_wrist, 11: left_hip, 12: right_hip
+            # 15: left_ankle, 16: right_ankle
             
             nose = keypoints[0] if len(keypoints) > 0 else [0, 0]
+            left_shoulder = keypoints[5] if len(keypoints) > 5 else [0, 0]
+            right_shoulder = keypoints[6] if len(keypoints) > 6 else [0, 0]
             left_wrist = keypoints[9] if len(keypoints) > 9 else [0, 0]
             right_wrist = keypoints[10] if len(keypoints) > 10 else [0, 0]
             left_hip = keypoints[11] if len(keypoints) > 11 else [0, 0]
             right_hip = keypoints[12] if len(keypoints) > 12 else [0, 0]
             
-            # Check for concealment behavior (hands near waist/pockets)
-            waist_y = (left_hip[1] + right_hip[1]) / 2 if left_hip[1] > 0 and right_hip[1] > 0 else 0
+            suspicious_behaviors = []
             
+            # Calculate body metrics
+            waist_y = (left_hip[1] + right_hip[1]) / 2 if left_hip[1] > 0 and right_hip[1] > 0 else 0
+            shoulder_y = (left_shoulder[1] + right_shoulder[1]) / 2 if left_shoulder[1] > 0 and right_shoulder[1] > 0 else 0
+            torso_height = waist_y - shoulder_y if waist_y > 0 and shoulder_y > 0 else 100
+            
+            # 1. Check for concealment behavior (hands near waist/pockets) - VERY COMMON
             if waist_y > 0:
-                left_near_waist = abs(left_wrist[1] - waist_y) < 50 if left_wrist[1] > 0 else False
-                right_near_waist = abs(right_wrist[1] - waist_y) < 50 if right_wrist[1] > 0 else False
+                threshold = max(80, torso_height * 0.4)  # Larger threshold
+                left_near_waist = abs(left_wrist[1] - waist_y) < threshold if left_wrist[1] > 0 else False
+                right_near_waist = abs(right_wrist[1] - waist_y) < threshold if right_wrist[1] > 0 else False
                 
                 if left_near_waist or right_near_waist:
-                    return "suspicious_hands"
+                    suspicious_behaviors.append("hands_near_waist")
             
-            # Check for bent/crouching posture
+            # 2. Check for bent/crouching posture (reaching low shelves)
             if nose[1] > 0 and waist_y > 0:
-                if nose[1] > waist_y * 0.8:  # Head unusually low
-                    return "crouching"
+                if nose[1] > waist_y * 0.7:  # Head below waist level
+                    suspicious_behaviors.append("crouching")
+            
+            # 3. Check for looking around behavior (head turned away from body)
+            if nose[0] > 0 and shoulder_y > 0:
+                body_center_x = (left_shoulder[0] + right_shoulder[0]) / 2 if left_shoulder[0] > 0 and right_shoulder[0] > 0 else nose[0]
+                head_offset = abs(nose[0] - body_center_x)
+                shoulder_width = abs(left_shoulder[0] - right_shoulder[0]) if left_shoulder[0] > 0 and right_shoulder[0] > 0 else 100
+                
+                if head_offset > shoulder_width * 0.5:
+                    suspicious_behaviors.append("looking_around")
+            
+            # 4. Check for arms extended (grabbing items)
+            if left_shoulder[0] > 0 and left_wrist[0] > 0:
+                left_arm_extended = abs(left_wrist[0] - left_shoulder[0]) > 150
+                if left_arm_extended:
+                    suspicious_behaviors.append("arm_extended")
+            
+            if right_shoulder[0] > 0 and right_wrist[0] > 0:
+                right_arm_extended = abs(right_wrist[0] - right_shoulder[0]) > 150
+                if right_arm_extended:
+                    suspicious_behaviors.append("arm_extended")
+            
+            # 5. Hands above head (unusual)
+            if shoulder_y > 0:
+                if (left_wrist[1] > 0 and left_wrist[1] < shoulder_y - 50) or \
+                   (right_wrist[1] > 0 and right_wrist[1] < shoulder_y - 50):
+                    suspicious_behaviors.append("hands_raised")
+            
+            # Return most suspicious behavior found
+            if "crouching" in suspicious_behaviors:
+                return "crouching"
+            elif "hands_near_waist" in suspicious_behaviors:
+                return "suspicious_hands"
+            elif "looking_around" in suspicious_behaviors:
+                return "looking_around"
+            elif "arm_extended" in suspicious_behaviors:
+                return "reaching"
+            elif suspicious_behaviors:
+                return suspicious_behaviors[0]
             
             return "normal"
         except Exception as e:
