@@ -42,22 +42,28 @@ API_KEY = os.environ.get("API_KEY", "")
 DEVICE_NAME = os.environ.get("DEVICE_NAME", "Edge-Device-001")
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 
-DETECTION_INTERVAL = float(os.environ.get("DETECTION_INTERVAL", "0.2"))  # 5 FPS processing
-CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.3"))  # Lower for more detections
+# Processing settings - balanced for stability
+DETECTION_INTERVAL = float(os.environ.get("DETECTION_INTERVAL", "0.5"))  # 2 FPS processing (more stable)
+CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.5"))  # Higher = fewer false positives
 ENABLE_POSE = os.environ.get("ENABLE_POSE_DETECTION", "true").lower() == "true"
 ENABLE_FACE = os.environ.get("ENABLE_FACE_RECOGNITION", "true").lower() == "true"
 ENABLE_GPT = os.environ.get("ENABLE_GPT_ANALYSIS", "true").lower() == "true"
 
-# Shoplifting detection settings
-INCIDENT_COOLDOWN = int(os.environ.get("INCIDENT_COOLDOWN_SECONDS", "30"))  # Don't spam incidents
-SUSPICIOUS_POSE_THRESHOLD = float(os.environ.get("SUSPICIOUS_POSE_THRESHOLD", "0.4"))
-CREATE_TEST_INCIDENTS = os.environ.get("CREATE_TEST_INCIDENTS", "false").lower() == "true"
+# Shoplifting detection settings - STRICTER to avoid false positives
+INCIDENT_COOLDOWN = int(os.environ.get("INCIDENT_COOLDOWN_SECONDS", "60"))  # 1 minute between incidents per camera
+MIN_SUSPICIOUS_FRAMES = int(os.environ.get("MIN_SUSPICIOUS_FRAMES", "3"))  # Require 3 suspicious frames before incident
+REQUIRE_GPT_CONFIRMATION = os.environ.get("REQUIRE_GPT_CONFIRMATION", "true").lower() == "true"  # Only GPT can create incidents
+
+# Staff filtering - to ignore employees
+STAFF_DETECTION_ENABLED = os.environ.get("STAFF_DETECTION_ENABLED", "false").lower() == "true"
+STAFF_ZONES = os.environ.get("STAFF_ZONES", "")  # Comma-separated zones to ignore (e.g., "behind_counter,stockroom")
 
 SYNC_INTERVAL = int(os.environ.get("SYNC_INTERVAL_SECONDS", "60"))
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", "60"))
-SNAPSHOT_INTERVAL = float(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "1"))  # 1 FPS live view
-MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MAX_RECONNECT_ATTEMPTS", "10"))
-RECONNECT_DELAY = int(os.environ.get("RECONNECT_DELAY_SECONDS", "5"))
+SNAPSHOT_INTERVAL = float(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "2"))  # 0.5 FPS live view (more stable)
+MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MAX_RECONNECT_ATTEMPTS", "100"))  # More attempts before giving up
+RECONNECT_DELAY = int(os.environ.get("RECONNECT_DELAY_SECONDS", "10"))  # Wait longer between reconnects
+MAX_DECODE_ERRORS = int(os.environ.get("MAX_DECODE_ERRORS", "100"))  # More tolerance for decode errors
 
 # Logging
 logging.basicConfig(
