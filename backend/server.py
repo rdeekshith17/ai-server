@@ -1512,6 +1512,64 @@ async def get_incidents(
     return {"incidents": incidents, "total": total, "limit": limit, "skip": skip}
 
 
+@api_router.get("/incidents/{incident_id}")
+async def get_incident_detail(request: Request, incident_id: str):
+    """Get single incident with full details including image"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Try to find by 'id' field first, then 'incident_id'
+    incident = await db.incidents.find_one(
+        {"$or": [{"id": incident_id}, {"incident_id": incident_id}]},
+        {"_id": 0}
+    )
+    
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    
+    # Check permission
+    if user.get("role") != UserRole.SUPER_ADMIN:
+        if user.get("client_id") != incident.get("client_id"):
+            raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Return frame_thumbnail as frame_image for frontend compatibility
+    if "frame_thumbnail" in incident and "frame_image" not in incident:
+        incident["frame_image"] = incident["frame_thumbnail"]
+    
+    return incident
+
+
+@api_router.delete("/incidents/{incident_id}")
+async def delete_incident(request: Request, incident_id: str):
+    """Delete an incident"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Find the incident first
+    incident = await db.incidents.find_one(
+        {"$or": [{"id": incident_id}, {"incident_id": incident_id}]}
+    )
+    
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    
+    # Check permission
+    if user.get("role") != UserRole.SUPER_ADMIN:
+        if user.get("client_id") != incident.get("client_id"):
+            raise HTTPException(status_code=403, detail="Access denied")
+    
+    result = await db.incidents.delete_one(
+        {"$or": [{"id": incident_id}, {"incident_id": incident_id}]}
+    )
+    
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    
+    return {"success": True, "message": "Incident deleted"}
+
+
 # ===========================================
 # ML STATUS
 # ===========================================
