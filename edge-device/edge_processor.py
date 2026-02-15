@@ -795,7 +795,7 @@ class EdgeProcessor:
         logger.info(f"Camera setup complete: {sum(1 for c in self.cameras.values() if c.is_running)}/{len(self.cameras)} connected")
     
     async def process_frame(self, camera: CameraStream, frame: np.ndarray):
-        """Process a single frame for detection"""
+        """Process a single frame for detection - MORE SENSITIVE"""
         
         # Step 1: Detect persons
         detections = self.detector.detect_persons(frame)
@@ -817,45 +817,69 @@ class EdgeProcessor:
                 det["watchlist_match"] = match
                 watchlist_match = match
         
-        # Determine if we should analyze with GPT
-        should_analyze = False
+        # Determine if we should create an incident
+        should_create_incident = False
+        should_analyze_gpt = False
         threat_indicators = []
         
-        # Check for suspicious poses
+        # Check for suspicious poses - ANY suspicious pose triggers incident
         suspicious_poses = [p for p in poses if p.get("pose_status") not in ["normal", "unknown"]]
         if suspicious_poses:
-            should_analyze = True
+            should_create_incident = True
+            should_analyze_gpt = True
             threat_indicators.extend([p["pose_status"] for p in suspicious_poses])
+            logger.info(f"🔍 Suspicious pose detected: {[p['pose_status'] for p in suspicious_poses]}")
         
         # Multiple people increases risk
         if len(detections) >= 2:
-            should_analyze = True
+            should_analyze_gpt = True
             threat_indicators.append("multiple_persons")
         
         # Watchlist match is always critical
         if watchlist_match:
-            should_analyze = True
+            should_create_incident = True
+            should_analyze_gpt = True
             threat_indicators.append("watchlist_match")
+        
+        # Single person near high-value areas (if configured)
+        if len(detections) == 1 and poses:
+            # Check if person is in certain positions that might indicate grabbing
+            for pose in poses:
+                if pose.get("pose_status") in ["reaching", "looking_around"]:
+                    should_create_incident = True
+                    threat_indicators.append(pose.get("pose_status"))
         
         # Step 4: GPT analysis if needed
         gpt_result = {"analyzed": False, "threat_level": "safe"}
         
-        if should_analyze and ENABLE_GPT:
+        if should_analyze_gpt and ENABLE_GPT:
             gpt_result = await self.gpt_analyzer.analyze_scene(frame, detections)
-        elif suspicious_poses:
-            # Generate basic incident without GPT
+            if gpt_result.get("threat_level") in ["warning", "critical"]:
+                should_create_incident = True
+        
+        # Generate basic incident for suspicious poses even without GPT
+        if should_create_incident and not gpt_result.get("analyzed"):
+            severity = "critical" if watchlist_match else "warning"
             gpt_result = {
                 "analyzed": False,
-                "threat_level": "warning",
-                "confidence": 0.6,
-                "description": f"Suspicious behavior detected: {', '.join(threat_indicators)}",
-                "behaviors_detected": threat_indicators
+                "threat_level": severity,
+                "confidence": 0.65,
+                "description": f"Suspicious behavior: {', '.join(set(threat_indicators))}",
+                "behaviors_detected": list(set(threat_indicators))
             }
         
-        # Step 5: Determine if incident should be created
+        # Step 5: Create incident if warranted
         threat_level = gpt_result.get("threat_level", "safe")
         
-        if threat_level in ["warning", "critical"] or watchlist_match:
+        if should_create_incident or threat_level in ["warning", "critical"] or watchlist_match:
+            # Check cooldown to avoid spam
+            current_time = time.time()
+            camera_last_incident = getattr(camera, 'last_incident_time', 0)
+            
+            if current_time - camera_last_incident < INCIDENT_COOLDOWN:
+                return None  # Still in cooldown
+            
+            camera.last_incident_time = current_time
             incident = await self.create_incident(camera, frame, detections, poses, gpt_result, watchlist_match)
             return incident
         
