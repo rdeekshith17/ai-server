@@ -826,64 +826,57 @@ class EdgeProcessor:
         logger.info(f"Camera setup complete: {sum(1 for c in self.cameras.values() if c.is_running)}/{len(self.cameras)} connected")
     
     async def process_frame(self, camera: CameraStream, frame: np.ndarray):
-        """Process frame - ONLY detect actual shoplifting (CRITICAL only)"""
+        """Process frame - ONLY GPT-confirmed shoplifting (CRITICAL only)"""
         
-        # Step 1: Detect persons
+        # Step 1: Detect persons (just to know if anyone is in frame)
         detections = self.detector.detect_persons(frame)
         self.detection_count += 1
         
         if not detections:
-            return None  # No persons detected
+            return None  # No one in frame
         
-        # Step 2: Check watchlist (CRITICAL - always flag known shoplifters)
-        watchlist_match = None
-        for det in detections:
-            match = self.detector.check_watchlist(frame, det["bbox"])
-            if match:
-                det["watchlist_match"] = match
-                watchlist_match = match
-                logger.warning(f"🚨 WATCHLIST MATCH: {match.get('name')}")
+        # Step 2: Check watchlist (CRITICAL - known shoplifters)
+        if ENABLE_FACE:
+            for det in detections:
+                match = self.detector.check_watchlist(frame, det["bbox"])
+                if match:
+                    logger.warning(f"🚨 WATCHLIST MATCH: {match.get('name')}")
+                    return await self._create_incident_if_allowed(
+                        camera, frame, detections,
+                        {
+                            "analyzed": False,
+                            "threat_level": "critical",
+                            "confidence": 0.95,
+                            "description": f"Known shoplifter: {match.get('name', 'Unknown')}",
+                            "behaviors_detected": ["watchlist_match"],
+                            "is_shoplifting": True
+                        },
+                        match
+                    )
         
-        # If watchlist match - immediate CRITICAL incident
-        if watchlist_match:
-            return await self._create_incident_if_allowed(
-                camera, frame, detections, [],
-                {
-                    "analyzed": False,
-                    "threat_level": "critical",
-                    "confidence": 0.95,
-                    "description": f"Known shoplifter detected: {watchlist_match.get('name', 'Unknown')}",
-                    "behaviors_detected": ["watchlist_match"],
-                    "is_shoplifting": True
-                },
-                watchlist_match
-            )
-        
-        # Step 3: Use GPT to detect actual shoplifting (required)
+        # Step 3: GPT Analysis (only way to detect new shoplifters)
         if not ENABLE_GPT:
-            return None  # Without GPT, we can't reliably detect shoplifting
+            return None
         
-        # Only analyze with GPT periodically (not every frame)
         gpt_result = await self.gpt_analyzer.analyze_scene(frame, detections)
         
-        # Only create incident if GPT confirms SHOPLIFTING
-        if gpt_result.get("is_shoplifting") == True and gpt_result.get("threat_level") == "critical":
-            logger.warning(f"🚨 SHOPLIFTING DETECTED: {gpt_result.get('description', '')[:100]}")
-            return await self._create_incident_if_allowed(camera, frame, detections, [], gpt_result, None)
+        # Only create incident if GPT confirms ACTUAL SHOPLIFTING
+        if gpt_result.get("is_shoplifting") == True:
+            logger.warning(f"🚨 SHOPLIFTING: {gpt_result.get('description', '')[:80]}")
+            return await self._create_incident_if_allowed(camera, frame, detections, gpt_result, None)
         
         return None
     
-    async def _create_incident_if_allowed(self, camera, frame, detections, poses, gpt_result, watchlist_match):
+    async def _create_incident_if_allowed(self, camera, frame, detections, gpt_result, watchlist_match):
         """Create CRITICAL incident if cooldown allows"""
         current_time = time.time()
         camera_last_incident = getattr(camera, 'last_incident_time', 0)
         
         if current_time - camera_last_incident < INCIDENT_COOLDOWN:
-            logger.debug(f"Incident cooldown active for {camera.name}")
-            return None
+            return None  # Cooldown active
         
         camera.last_incident_time = current_time
-        return await self.create_incident(camera, frame, detections, poses, gpt_result, watchlist_match)
+        return await self.create_incident(camera, frame, detections, [], gpt_result, watchlist_match)
     
     async def create_incident(self, camera: CameraStream, frame: np.ndarray, 
                             detections: List, poses: List, gpt_result: Dict,
