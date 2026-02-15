@@ -2079,26 +2079,40 @@ async def register_edge_device(data: EdgeDeviceRegister):
     }
 
 
+class HeartbeatDataV2(BaseModel):
+    client_id: str
+    api_key: str
+    device_name: Optional[str] = None
+    cameras_online: int = 0
+    cameras_total: int = 0
+    stream_health: Optional[List[Dict]] = None
+    timestamp: Optional[str] = None
+
+
 @api_router.post("/edge/heartbeat")
-async def edge_heartbeat(data: HeartbeatData):
+async def edge_heartbeat(data: HeartbeatDataV2):
     """Edge device health check (called every 1-5 minutes)"""
     
     if not await verify_edge_api_key(data.client_id, data.api_key):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
+    update_data = {
+        "status": "online" if data.cameras_online > 0 else "degraded",
+        "cameras_online": data.cameras_online,
+        "cameras_total": data.cameras_total,
+        "last_heartbeat": datetime.now(timezone.utc).isoformat()
+    }
+    
+    if data.device_name:
+        update_data["device_name"] = data.device_name
+    
+    if data.stream_health:
+        update_data["stream_health"] = data.stream_health
+    
     await db.edge_devices.update_one(
-        {"device_id": data.device_id},
-        {
-            "$set": {
-                "status": data.status,
-                "cameras_online": data.cameras_online,
-                "cameras_total": data.cameras_total,
-                "cpu_usage": data.cpu_usage,
-                "memory_usage": data.memory_usage,
-                "last_incident_at": data.last_incident_at,
-                "last_heartbeat": datetime.now(timezone.utc).isoformat()
-            }
-        }
+        {"client_id": data.client_id},
+        {"$set": update_data},
+        upsert=True
     )
     
     client = await get_client_by_id(data.client_id)
@@ -2108,6 +2122,81 @@ async def edge_heartbeat(data: HeartbeatData):
         "config_updated": False,
         "config": client.get("settings", {}) if client else {}
     }
+
+
+class SnapshotData(BaseModel):
+    client_id: str
+    api_key: str
+    snapshots: List[Dict]
+    timestamp: Optional[str] = None
+
+
+@api_router.post("/edge/snapshots")
+async def upload_snapshots(data: SnapshotData):
+    """Receive camera snapshots from edge device for live view"""
+    
+    if not await verify_edge_api_key(data.client_id, data.api_key):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Store snapshots in database (one per camera, overwrite previous)
+    for snapshot in data.snapshots:
+        await db.camera_snapshots.update_one(
+            {"camera_id": snapshot.get("camera_id")},
+            {
+                "$set": {
+                    "client_id": data.client_id,
+                    "camera_id": snapshot.get("camera_id"),
+                    "camera_name": snapshot.get("camera_name"),
+                    "image": snapshot.get("image"),
+                    "health": snapshot.get("health", {}),
+                    "timestamp": data.timestamp or datetime.now(timezone.utc).isoformat()
+                }
+            },
+            upsert=True
+        )
+    
+    return {"success": True, "snapshots_received": len(data.snapshots)}
+
+
+@api_router.get("/live/snapshots/{client_id}")
+async def get_live_snapshots(request: Request, client_id: str):
+    """Get latest camera snapshots for live view"""
+    user = await require_auth(request)
+    
+    # Check permission
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    snapshots = await db.camera_snapshots.find(
+        {"client_id": client_id},
+        {"_id": 0}
+    ).to_list(50)
+    
+    return {
+        "success": True,
+        "snapshots": snapshots,
+        "count": len(snapshots)
+    }
+
+
+@api_router.get("/live/snapshot/{camera_id}")
+async def get_camera_snapshot(request: Request, camera_id: str):
+    """Get latest snapshot for a specific camera"""
+    user = await require_auth(request)
+    
+    snapshot = await db.camera_snapshots.find_one(
+        {"camera_id": camera_id},
+        {"_id": 0}
+    )
+    
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="No snapshot available")
+    
+    # Check permission
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != snapshot.get("client_id"):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    return snapshot
 
 
 @api_router.post("/edge/incidents")
