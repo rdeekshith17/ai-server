@@ -827,24 +827,16 @@ class EdgeProcessor:
         logger.info(f"Camera setup complete: {sum(1 for c in self.cameras.values() if c.is_running)}/{len(self.cameras)} connected")
     
     async def process_frame(self, camera: CameraStream, frame: np.ndarray):
-        """Process a single frame for detection - STRICT MODE to reduce false positives"""
+        """Process frame - ONLY detect actual shoplifting (CRITICAL only)"""
         
         # Step 1: Detect persons
         detections = self.detector.detect_persons(frame)
         self.detection_count += 1
         
         if not detections:
-            # Reset suspicious tracker for this camera if no one detected
-            if camera.camera_id in self.suspicious_tracker:
-                self.suspicious_tracker[camera.camera_id]["count"] = 0
-            return None
+            return None  # No persons detected
         
-        # Step 2: Detect poses (only if enabled)
-        poses = []
-        if ENABLE_POSE:
-            poses = self.detector.detect_poses(frame)
-        
-        # Step 3: Check watchlist for each detection (ALWAYS creates incident)
+        # Step 2: Check watchlist (CRITICAL - always flag known shoplifters)
         watchlist_match = None
         for det in detections:
             match = self.detector.check_watchlist(frame, det["bbox"])
@@ -853,101 +845,43 @@ class EdgeProcessor:
                 watchlist_match = match
                 logger.warning(f"🚨 WATCHLIST MATCH: {match.get('name')}")
         
-        # If watchlist match - immediate incident (skip other checks)
+        # If watchlist match - immediate CRITICAL incident
         if watchlist_match:
             return await self._create_incident_if_allowed(
-                camera, frame, detections, poses,
+                camera, frame, detections, [],
                 {
                     "analyzed": False,
                     "threat_level": "critical",
                     "confidence": 0.95,
-                    "description": f"Watchlist match: {watchlist_match.get('name', 'Unknown')}",
-                    "behaviors_detected": ["watchlist_match"]
+                    "description": f"Known shoplifter detected: {watchlist_match.get('name', 'Unknown')}",
+                    "behaviors_detected": ["watchlist_match"],
+                    "is_shoplifting": True
                 },
                 watchlist_match
             )
         
-        # Step 4: Check for TRULY suspicious poses (not normal shopping behavior)
-        # Only flag: crouching (hiding), suspicious_hands near pockets for extended time
-        truly_suspicious_poses = []
-        for pose in poses:
-            status = pose.get("pose_status", "normal")
-            # Only these are truly suspicious - ignore reaching, looking_around (normal shopping)
-            if status in ["crouching", "suspicious_hands"]:
-                truly_suspicious_poses.append(status)
+        # Step 3: Use GPT to detect actual shoplifting (required)
+        if not ENABLE_GPT:
+            return None  # Without GPT, we can't reliably detect shoplifting
         
-        # Step 5: Track suspicious behavior over multiple frames
-        camera_id = camera.camera_id
-        current_time = time.time()
+        # Only analyze with GPT periodically (not every frame)
+        gpt_result = await self.gpt_analyzer.analyze_scene(frame, detections)
         
-        if camera_id not in self.suspicious_tracker:
-            self.suspicious_tracker[camera_id] = {"count": 0, "last_seen": 0, "behaviors": []}
+        # Only create incident if GPT confirms SHOPLIFTING
+        if gpt_result.get("is_shoplifting") == True and gpt_result.get("threat_level") == "critical":
+            logger.warning(f"🚨 SHOPLIFTING DETECTED: {gpt_result.get('description', '')[:100]}")
+            return await self._create_incident_if_allowed(camera, frame, detections, [], gpt_result, None)
         
-        tracker = self.suspicious_tracker[camera_id]
-        
-        # If suspicious behavior detected
-        if truly_suspicious_poses:
-            # Check if this is continuation of previous suspicious activity
-            if current_time - tracker["last_seen"] < 5:  # Within 5 seconds
-                tracker["count"] += 1
-                tracker["behaviors"].extend(truly_suspicious_poses)
-            else:
-                # New suspicious activity
-                tracker["count"] = 1
-                tracker["behaviors"] = truly_suspicious_poses
-            
-            tracker["last_seen"] = current_time
-            
-            logger.debug(f"Suspicious frame #{tracker['count']} on {camera.name}: {truly_suspicious_poses}")
-        else:
-            # No suspicious behavior - decay the counter
-            if current_time - tracker["last_seen"] > 10:  # 10 seconds of no suspicious activity
-                tracker["count"] = max(0, tracker["count"] - 1)
-        
-        # Step 6: Only create incident after MIN_SUSPICIOUS_FRAMES consecutive detections
-        if tracker["count"] < MIN_SUSPICIOUS_FRAMES:
-            return None  # Not enough evidence yet
-        
-        # Step 7: GPT Analysis for final confirmation (if enabled)
-        gpt_result = {"analyzed": False, "threat_level": "safe"}
-        
-        if REQUIRE_GPT_CONFIRMATION and ENABLE_GPT:
-            logger.info(f"🔍 Analyzing with GPT after {tracker['count']} suspicious frames...")
-            gpt_result = await self.gpt_analyzer.analyze_scene(frame, detections)
-            
-            # GPT must confirm it's suspicious
-            if gpt_result.get("threat_level") not in ["warning", "critical"]:
-                logger.info(f"GPT says safe - not creating incident")
-                tracker["count"] = 0  # Reset tracker
-                return None
-        else:
-            # No GPT, use pose-based detection
-            gpt_result = {
-                "analyzed": False,
-                "threat_level": "warning",
-                "confidence": 0.6,
-                "description": f"Suspicious behavior detected: {', '.join(set(tracker['behaviors']))}",
-                "behaviors_detected": list(set(tracker["behaviors"]))
-            }
-        
-        # Step 8: Create incident (with cooldown check)
-        incident = await self._create_incident_if_allowed(camera, frame, detections, poses, gpt_result, watchlist_match)
-        
-        # Reset tracker after creating incident
-        if incident:
-            tracker["count"] = 0
-            tracker["behaviors"] = []
-        
-        return incident
+        return None
     
     async def _create_incident_if_allowed(self, camera, frame, detections, poses, gpt_result, watchlist_match):
-        """Create incident if cooldown allows"""
+        """Create CRITICAL incident if cooldown allows"""
         current_time = time.time()
         camera_last_incident = getattr(camera, 'last_incident_time', 0)
         
         if current_time - camera_last_incident < INCIDENT_COOLDOWN:
             logger.debug(f"Incident cooldown active for {camera.name}")
-            return None  # Still in cooldown
+            return None
         
         camera.last_incident_time = current_time
         return await self.create_incident(camera, frame, detections, poses, gpt_result, watchlist_match)
