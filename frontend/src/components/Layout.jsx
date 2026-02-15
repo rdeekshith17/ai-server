@@ -7,6 +7,7 @@ import {
   Shield,
   Users,
   Camera,
+  Video,
   LogOut,
   ChevronDown,
   Settings,
@@ -25,7 +26,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 
 const navItems = [
   { path: "/", icon: LayoutDashboard, label: "Dashboard" },
-  { path: "/live", icon: Camera, label: "Live Detection" },
+  { path: "/cameras", icon: Camera, label: "Live Cameras" },
+  { path: "/live", icon: Video, label: "Video Detection" },
   { path: "/upload", icon: Upload, label: "Upload Video" },
   { path: "/watchlist", icon: Users, label: "Watchlist" },
   { path: "/incidents", icon: AlertTriangle, label: "Incidents" },
