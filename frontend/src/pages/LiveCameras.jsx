@@ -169,6 +169,30 @@ export default function LiveCameras() {
         </div>
         
         <div className="flex items-center gap-4">
+          {/* Client Selector (Admin only) */}
+          {user?.role === 'super_admin' && clients.length > 0 && (
+            <Select 
+              value={selectedClientId || ""} 
+              onValueChange={(value) => {
+                setSelectedClientId(value);
+                setSnapshots([]);
+                setLoading(true);
+              }}
+            >
+              <SelectTrigger className="w-[250px] bg-secondary border-white/10">
+                <Building2 className="w-4 h-4 mr-2 text-muted-foreground" />
+                <SelectValue placeholder="Select client..." />
+              </SelectTrigger>
+              <SelectContent>
+                {clients.map(client => (
+                  <SelectItem key={client.client_id} value={client.client_id}>
+                    {client.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          
           {/* Auto Refresh Toggle */}
           <div className="flex items-center gap-2">
             <Button
