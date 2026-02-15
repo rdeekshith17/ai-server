@@ -243,8 +243,16 @@ export default function Incidents() {
                       data-testid={`incident-card-${incident.id}`}
                     >
                       {/* Image Placeholder / Thumbnail */}
-                      <div className="h-32 bg-black/50 flex items-center justify-center relative">
-                        <Image className="w-12 h-12 text-muted-foreground/30" />
+                      <div className="h-32 bg-black/50 flex items-center justify-center relative overflow-hidden">
+                        {incident.frame_thumbnail ? (
+                          <img 
+                            src={`data:image/jpeg;base64,${incident.frame_thumbnail}`}
+                            alt="Incident thumbnail"
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <Image className="w-12 h-12 text-muted-foreground/30" />
+                        )}
                         <div className="absolute top-2 left-2">
                           <Badge className={`${config.bg} ${config.text} ${config.border} uppercase text-[10px]`}>
                             {incident.severity}
