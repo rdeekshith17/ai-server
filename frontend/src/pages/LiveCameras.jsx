@@ -61,6 +61,12 @@ export default function LiveCameras() {
   }, [user]);
 
   useEffect(() => {
+    if (selectedClientId) {
+      fetchSnapshots();
+    }
+  }, [selectedClientId]);
+
+  useEffect(() => {
     if (autoRefresh && (user?.client_id || selectedClientId)) {
       refreshRef.current = setInterval(fetchSnapshots, refreshInterval);
     } else {
