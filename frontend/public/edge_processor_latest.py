@@ -525,17 +525,17 @@ class GPTAnalyzer:
     def __init__(self):
         self.enabled = ENABLE_GPT and EMERGENT_LLM_KEY
         self.last_analysis_time = 0
-        self.min_analysis_interval = 3.0  # Don't analyze too frequently
+        self.min_analysis_interval = 5.0  # 5 seconds between GPT calls
         
     async def analyze_scene(self, frame: np.ndarray, detections: List[Dict]) -> Dict:
-        """Analyze scene with GPT Vision for threat assessment"""
+        """Analyze scene with GPT Vision - ONLY detect actual shoplifting"""
         if not self.enabled:
-            return {"analyzed": False, "threat_level": "unknown"}
+            return {"analyzed": False, "threat_level": "safe"}
         
         # Rate limit
         now = time.time()
         if now - self.last_analysis_time < self.min_analysis_interval:
-            return {"analyzed": False, "threat_level": "unknown", "reason": "rate_limited"}
+            return {"analyzed": False, "threat_level": "safe", "reason": "rate_limited"}
         
         try:
             from emergentintegrations.llm.openai import chat_completion_with_image
@@ -544,29 +544,37 @@ class GPTAnalyzer:
             _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
             img_base64 = base64.b64encode(buffer).decode('utf-8')
             
-            prompt = f"""Analyze this retail store security camera image for potential shoplifting behavior.
+            prompt = f"""You are a shoplifting detection AI for a retail store security camera.
 
-There are {len(detections)} people detected in the frame.
+IMPORTANT: Only report CRITICAL if you see ACTUAL SHOPLIFTING IN PROGRESS. 
+Do NOT report normal shopping behavior, staff restocking, or customers browsing.
 
-Look for these suspicious behaviors:
-1. Concealment - hiding items in clothing, bags, or pockets
-2. Nervous behavior - looking around frequently, avoiding staff
-3. Unusual browsing - staying too long in one area, handling items excessively
-4. Group distraction - one person distracting while another takes items
-5. Bag/jacket stuffing - putting items in personal bags or clothing
-6. Price tag tampering
-7. Quick grab and movement toward exit
+There are {len(detections)} people in the frame.
 
-Response Format (JSON):
+ONLY flag as CRITICAL (shoplifting) if you see:
+1. Person ACTIVELY hiding/concealing merchandise in clothing, bag, or pocket
+2. Person removing security tags
+3. Person stuffing items into bag/jacket while looking around nervously
+4. Person walking toward exit with concealed unpaid items
+5. Known shoplifting technique (bag switching, ticket switching, etc.)
+
+DO NOT flag as critical:
+- Normal shopping/browsing
+- Staff restocking shelves
+- Customers looking at products
+- People with hands in their own pockets (without merchandise)
+- People bending down to look at lower shelves
+
+Response Format (JSON only):
 {{
-  "threat_level": "safe" | "warning" | "critical",
+  "is_shoplifting": true/false,
   "confidence": 0.0-1.0,
-  "description": "Brief description of what you see",
-  "behaviors_detected": ["list", "of", "suspicious", "behaviors"],
-  "recommended_action": "suggestion for security staff"
+  "description": "What exactly you see happening",
+  "evidence": ["specific", "evidence", "of", "theft"]
 }}
 
-Respond ONLY with the JSON object, no other text."""
+Be VERY strict. Only is_shoplifting=true if you are confident theft is occurring.
+Respond ONLY with JSON, no other text."""
 
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
@@ -584,10 +592,23 @@ Respond ONLY with the JSON object, no other text."""
             if response and response.content:
                 content = response.content.strip()
                 # Extract JSON from response
-                if content.startswith("{"):
-                    result = json.loads(content)
-                    result["analyzed"] = True
-                    return result
+                if "{" in content:
+                    # Find JSON in response
+                    start = content.find("{")
+                    end = content.rfind("}") + 1
+                    json_str = content[start:end]
+                    result = json.loads(json_str)
+                    
+                    # Convert to our format
+                    is_shoplifting = result.get("is_shoplifting", False)
+                    return {
+                        "analyzed": True,
+                        "threat_level": "critical" if is_shoplifting else "safe",
+                        "confidence": result.get("confidence", 0.5),
+                        "description": result.get("description", ""),
+                        "behaviors_detected": result.get("evidence", []),
+                        "is_shoplifting": is_shoplifting
+                    }
             
             return {"analyzed": False, "threat_level": "unknown"}
             
@@ -806,24 +827,16 @@ class EdgeProcessor:
         logger.info(f"Camera setup complete: {sum(1 for c in self.cameras.values() if c.is_running)}/{len(self.cameras)} connected")
     
     async def process_frame(self, camera: CameraStream, frame: np.ndarray):
-        """Process a single frame for detection - STRICT MODE to reduce false positives"""
+        """Process frame - ONLY detect actual shoplifting (CRITICAL only)"""
         
         # Step 1: Detect persons
         detections = self.detector.detect_persons(frame)
         self.detection_count += 1
         
         if not detections:
-            # Reset suspicious tracker for this camera if no one detected
-            if camera.camera_id in self.suspicious_tracker:
-                self.suspicious_tracker[camera.camera_id]["count"] = 0
-            return None
+            return None  # No persons detected
         
-        # Step 2: Detect poses (only if enabled)
-        poses = []
-        if ENABLE_POSE:
-            poses = self.detector.detect_poses(frame)
-        
-        # Step 3: Check watchlist for each detection (ALWAYS creates incident)
+        # Step 2: Check watchlist (CRITICAL - always flag known shoplifters)
         watchlist_match = None
         for det in detections:
             match = self.detector.check_watchlist(frame, det["bbox"])
@@ -832,101 +845,43 @@ class EdgeProcessor:
                 watchlist_match = match
                 logger.warning(f"🚨 WATCHLIST MATCH: {match.get('name')}")
         
-        # If watchlist match - immediate incident (skip other checks)
+        # If watchlist match - immediate CRITICAL incident
         if watchlist_match:
             return await self._create_incident_if_allowed(
-                camera, frame, detections, poses,
+                camera, frame, detections, [],
                 {
                     "analyzed": False,
                     "threat_level": "critical",
                     "confidence": 0.95,
-                    "description": f"Watchlist match: {watchlist_match.get('name', 'Unknown')}",
-                    "behaviors_detected": ["watchlist_match"]
+                    "description": f"Known shoplifter detected: {watchlist_match.get('name', 'Unknown')}",
+                    "behaviors_detected": ["watchlist_match"],
+                    "is_shoplifting": True
                 },
                 watchlist_match
             )
         
-        # Step 4: Check for TRULY suspicious poses (not normal shopping behavior)
-        # Only flag: crouching (hiding), suspicious_hands near pockets for extended time
-        truly_suspicious_poses = []
-        for pose in poses:
-            status = pose.get("pose_status", "normal")
-            # Only these are truly suspicious - ignore reaching, looking_around (normal shopping)
-            if status in ["crouching", "suspicious_hands"]:
-                truly_suspicious_poses.append(status)
+        # Step 3: Use GPT to detect actual shoplifting (required)
+        if not ENABLE_GPT:
+            return None  # Without GPT, we can't reliably detect shoplifting
         
-        # Step 5: Track suspicious behavior over multiple frames
-        camera_id = camera.camera_id
-        current_time = time.time()
+        # Only analyze with GPT periodically (not every frame)
+        gpt_result = await self.gpt_analyzer.analyze_scene(frame, detections)
         
-        if camera_id not in self.suspicious_tracker:
-            self.suspicious_tracker[camera_id] = {"count": 0, "last_seen": 0, "behaviors": []}
+        # Only create incident if GPT confirms SHOPLIFTING
+        if gpt_result.get("is_shoplifting") == True and gpt_result.get("threat_level") == "critical":
+            logger.warning(f"🚨 SHOPLIFTING DETECTED: {gpt_result.get('description', '')[:100]}")
+            return await self._create_incident_if_allowed(camera, frame, detections, [], gpt_result, None)
         
-        tracker = self.suspicious_tracker[camera_id]
-        
-        # If suspicious behavior detected
-        if truly_suspicious_poses:
-            # Check if this is continuation of previous suspicious activity
-            if current_time - tracker["last_seen"] < 5:  # Within 5 seconds
-                tracker["count"] += 1
-                tracker["behaviors"].extend(truly_suspicious_poses)
-            else:
-                # New suspicious activity
-                tracker["count"] = 1
-                tracker["behaviors"] = truly_suspicious_poses
-            
-            tracker["last_seen"] = current_time
-            
-            logger.debug(f"Suspicious frame #{tracker['count']} on {camera.name}: {truly_suspicious_poses}")
-        else:
-            # No suspicious behavior - decay the counter
-            if current_time - tracker["last_seen"] > 10:  # 10 seconds of no suspicious activity
-                tracker["count"] = max(0, tracker["count"] - 1)
-        
-        # Step 6: Only create incident after MIN_SUSPICIOUS_FRAMES consecutive detections
-        if tracker["count"] < MIN_SUSPICIOUS_FRAMES:
-            return None  # Not enough evidence yet
-        
-        # Step 7: GPT Analysis for final confirmation (if enabled)
-        gpt_result = {"analyzed": False, "threat_level": "safe"}
-        
-        if REQUIRE_GPT_CONFIRMATION and ENABLE_GPT:
-            logger.info(f"🔍 Analyzing with GPT after {tracker['count']} suspicious frames...")
-            gpt_result = await self.gpt_analyzer.analyze_scene(frame, detections)
-            
-            # GPT must confirm it's suspicious
-            if gpt_result.get("threat_level") not in ["warning", "critical"]:
-                logger.info(f"GPT says safe - not creating incident")
-                tracker["count"] = 0  # Reset tracker
-                return None
-        else:
-            # No GPT, use pose-based detection
-            gpt_result = {
-                "analyzed": False,
-                "threat_level": "warning",
-                "confidence": 0.6,
-                "description": f"Suspicious behavior detected: {', '.join(set(tracker['behaviors']))}",
-                "behaviors_detected": list(set(tracker["behaviors"]))
-            }
-        
-        # Step 8: Create incident (with cooldown check)
-        incident = await self._create_incident_if_allowed(camera, frame, detections, poses, gpt_result, watchlist_match)
-        
-        # Reset tracker after creating incident
-        if incident:
-            tracker["count"] = 0
-            tracker["behaviors"] = []
-        
-        return incident
+        return None
     
     async def _create_incident_if_allowed(self, camera, frame, detections, poses, gpt_result, watchlist_match):
-        """Create incident if cooldown allows"""
+        """Create CRITICAL incident if cooldown allows"""
         current_time = time.time()
         camera_last_incident = getattr(camera, 'last_incident_time', 0)
         
         if current_time - camera_last_incident < INCIDENT_COOLDOWN:
             logger.debug(f"Incident cooldown active for {camera.name}")
-            return None  # Still in cooldown
+            return None
         
         camera.last_incident_time = current_time
         return await self.create_incident(camera, frame, detections, poses, gpt_result, watchlist_match)
@@ -934,24 +889,26 @@ class EdgeProcessor:
     async def create_incident(self, camera: CameraStream, frame: np.ndarray, 
                             detections: List, poses: List, gpt_result: Dict,
                             watchlist_match: Optional[Dict] = None) -> Dict:
-        """Create and upload incident"""
+        """Create and upload CRITICAL shoplifting incident"""
         
-        # Generate thumbnail with detection boxes
+        # Generate thumbnail with detection boxes (RED for shoplifters)
         annotated_frame = frame.copy()
         for det in detections:
             x1, y1, x2, y2 = det["bbox"]
-            color = (0, 0, 255) if det.get("watchlist_match") else (0, 255, 0)
-            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
+            # Red box for all - this is a shoplifting incident
+            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+            cv2.putText(annotated_frame, "SHOPLIFTER", (x1, y1-10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         
-        _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
         thumbnail = base64.b64encode(buffer).decode('utf-8')
         
         incident = {
             "incident_id": f"inc_{uuid.uuid4().hex[:12]}",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "severity": gpt_result.get("threat_level", "warning"),
-            "confidence": gpt_result.get("confidence", 0.7),
-            "description": gpt_result.get("description", "Suspicious activity detected"),
+            "severity": "critical",  # ALWAYS CRITICAL
+            "confidence": gpt_result.get("confidence", 0.8),
+            "description": gpt_result.get("description", "Shoplifting detected"),
             "camera_id": camera.camera_id,
             "camera_name": camera.name,
             "frame_thumbnail": thumbnail,
