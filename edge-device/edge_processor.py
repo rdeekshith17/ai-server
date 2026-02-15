@@ -213,7 +213,7 @@ class CameraStream:
         with self.lock:
             if not self.cap or not self.cap.isOpened():
                 if not self.reconnect():
-                    return None
+                    return self.last_frame  # Return last frame instead of None
             
             try:
                 ret, frame = self.cap.read()
@@ -228,15 +228,18 @@ class CameraStream:
                     self.last_frame_time = time.time()
                     self.health.record_frame()
                     self.health.frames_processed += 1
+                    # Reset error count on successful read
+                    self.health.decode_errors = 0
                     return frame
                 else:
                     self.health.record_error()
                     
-                    # Check if we've lost connection
-                    if self.health.decode_errors > 10:
-                        logger.warning(f"Too many errors on {self.name}, reconnecting...")
-                        self.reconnect()
+                    # Only reconnect if we have MANY errors (more tolerant)
+                    if self.health.decode_errors > MAX_DECODE_ERRORS:
+                        logger.warning(f"Too many errors ({self.health.decode_errors}) on {self.name}, reconnecting...")
                         self.health.decode_errors = 0
+                        # Don't block - reconnect in background
+                        self.reconnect()
                     
                     # Return last good frame if available
                     if self.last_frame is not None:
