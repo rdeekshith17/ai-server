@@ -99,7 +99,7 @@ export default function LiveCameras() {
     }
     
     try {
-      const response = await axios.get(`${API}/api/live/snapshots/${user.client_id}`, {
+      const response = await axios.get(`${API}/api/live/snapshots/${clientId}`, {
         withCredentials: true,
         headers: getAuthHeaders()
       });
