@@ -150,72 +150,106 @@ class CameraStream:
         
     def connect(self) -> bool:
         """Connect to RTSP stream with error handling"""
-        with self.lock:
-            try:
-                # Release existing connection
-                if self.cap:
+        try:
+            # Release existing connection first
+            if self.cap:
+                try:
                     self.cap.release()
-                
-                logger.info(f"Connecting to camera: {self.name} ({self.rtsp_url})")
-                
-                # Set RTSP transport options for better reliability
-                # Try TCP first (more reliable), fallback to UDP
-                os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|buffer_size;1024000'
-                
-                self.cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
-                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
-                
-                # Set timeouts
-                self.cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)
-                self.cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
-                
-                if self.cap.isOpened():
-                    # Read a test frame
-                    ret, frame = self.cap.read()
-                    if ret and frame is not None:
-                        logger.info(f"✅ Connected to camera: {self.name} ({self.camera_id})")
-                        self.is_running = True
-                        self.health.is_connected = True
-                        self.reconnect_attempts = 0
-                        self.last_frame = frame
-                        self.last_frame_time = time.time()
-                        return True
-                    else:
-                        logger.warning(f"Camera opened but no frame: {self.name}")
-                
-                logger.error(f"❌ Failed to connect to camera: {self.name}")
-                self.health.is_connected = False
-                return False
-                
-            except Exception as e:
-                logger.error(f"Camera connection error ({self.name}): {e}")
-                self.health.is_connected = False
-                return False
+                except:
+                    pass
+                self.cap = None
+            
+            logger.info(f"Connecting to camera: {self.name} ({self.rtsp_url})")
+            
+            # Set RTSP transport options for better reliability
+            os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|buffer_size;1024000|stimeout;5000000'
+            
+            self.cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+            
+            # Set timeouts
+            self.cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 15000)
+            self.cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10000)
+            
+            if self.cap.isOpened():
+                # Read a test frame
+                ret, frame = self.cap.read()
+                if ret and frame is not None:
+                    logger.info(f"✅ Connected to camera: {self.name}")
+                    self.is_running = True
+                    self.health.is_connected = True
+                    self.reconnect_attempts = 0
+                    self.last_frame = frame
+                    self.last_frame_time = time.time()
+                    self.health.decode_errors = 0  # Reset errors on successful connect
+                    return True
+                else:
+                    logger.warning(f"Camera opened but no frame: {self.name}")
+            
+            logger.error(f"❌ Failed to connect: {self.name}")
+            self.health.is_connected = False
+            return False
+            
+        except Exception as e:
+            logger.error(f"Camera connection error ({self.name}): {e}")
+            self.health.is_connected = False
+            return False
     
-    def reconnect(self) -> bool:
-        """Attempt to reconnect with exponential backoff"""
+    def schedule_reconnect(self):
+        """Schedule a reconnection (non-blocking)"""
         if self.reconnect_attempts >= MAX_RECONNECT_ATTEMPTS:
             logger.error(f"Max reconnect attempts reached for {self.name}")
-            return False
+            return
         
         self.reconnect_attempts += 1
         self.health.record_reconnect()
+        self.is_running = False
+        self.health.is_connected = False
         
-        delay = min(RECONNECT_DELAY * (2 ** (self.reconnect_attempts - 1)), 60)
-        logger.info(f"Reconnecting to {self.name} in {delay}s (attempt {self.reconnect_attempts}/{MAX_RECONNECT_ATTEMPTS})")
+        # Release current connection
+        if self.cap:
+            try:
+                self.cap.release()
+            except:
+                pass
+            self.cap = None
         
-        time.sleep(delay)
+        logger.info(f"Will reconnect to {self.name} (attempt {self.reconnect_attempts})")
+    
+    def try_reconnect(self) -> bool:
+        """Try to reconnect if scheduled"""
+        if self.is_running:
+            return True  # Already connected
+        
+        # Simple delay based on attempt count
+        delay = min(RECONNECT_DELAY * self.reconnect_attempts, 120)
+        
+        # Check if enough time has passed since last attempt
+        if not hasattr(self, '_last_reconnect_time'):
+            self._last_reconnect_time = 0
+        
+        if time.time() - self._last_reconnect_time < delay:
+            return False  # Wait more
+        
+        self._last_reconnect_time = time.time()
+        logger.info(f"Attempting reconnect to {self.name}...")
         return self.connect()
     
     def read_frame(self) -> Optional[np.ndarray]:
         """Read single frame from camera with error handling"""
-        with self.lock:
-            if not self.cap or not self.cap.isOpened():
-                if not self.reconnect():
-                    return self.last_frame  # Return last frame instead of None
+        # If not running, try to reconnect (non-blocking)
+        if not self.is_running:
+            self.try_reconnect()
+            return self.last_frame
+        
+        if not self.cap or not self.cap.isOpened():
+            self.schedule_reconnect()
+            return self.last_frame
+        
+        try:
+            ret, frame = self.cap.read()
             
-            try:
-                ret, frame = self.cap.read()
+            if ret and frame is not None:
                 
                 if ret and frame is not None:
                     # Validate frame
