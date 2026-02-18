@@ -297,12 +297,14 @@ class CameraStream:
     
     def release(self):
         """Release camera connection"""
-        with self.lock:
-            self.is_running = False
-            self.health.is_connected = False
-            if self.cap:
+        self.is_running = False
+        self.health.is_connected = False
+        if self.cap:
+            try:
                 self.cap.release()
-                self.cap = None
+            except:
+                pass
+            self.cap = None
 
 
 class MLDetector:
