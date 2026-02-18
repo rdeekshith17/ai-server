@@ -58,10 +58,10 @@ SYNC_INTERVAL = int(os.environ.get("SYNC_INTERVAL_SECONDS", "60"))
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", "60"))
 SNAPSHOT_INTERVAL = float(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "3"))  # Snapshot every 3 seconds
 
-# RTSP Stability - VERY TOLERANT
-MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MAX_RECONNECT_ATTEMPTS", "999"))  # Never give up
-RECONNECT_DELAY = int(os.environ.get("RECONNECT_DELAY_SECONDS", "30"))  # Wait 30s between reconnects
-MAX_DECODE_ERRORS = int(os.environ.get("MAX_DECODE_ERRORS", "1000"))  # Very tolerant of errors
+# RTSP Stability - EXTREMELY TOLERANT (RTSP errors are normal)
+MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MAX_RECONNECT_ATTEMPTS", "9999"))  # Basically infinite
+RECONNECT_DELAY = int(os.environ.get("RECONNECT_DELAY_SECONDS", "60"))  # Wait 60s between reconnects
+MAX_DECODE_ERRORS = int(os.environ.get("MAX_DECODE_ERRORS", "99999"))  # Never reconnect due to decode errors
 
 # Logging - reduce noise
 logging.basicConfig(
