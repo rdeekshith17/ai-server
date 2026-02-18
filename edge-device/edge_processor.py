@@ -275,11 +275,6 @@ class CameraStream:
             logger.error(f"Frame read error ({self.name}): {e}")
             self.health.record_error()
             return self.last_frame
-                    
-            except Exception as e:
-                logger.error(f"Frame read error ({self.name}): {e}")
-                self.health.record_error()
-                return self.last_frame
     
     def get_snapshot(self) -> Optional[str]:
         """Get current frame as base64 JPEG"""
