@@ -250,34 +250,31 @@ class CameraStream:
             ret, frame = self.cap.read()
             
             if ret and frame is not None:
-                
-                if ret and frame is not None:
-                    # Validate frame
-                    if frame.size == 0 or frame.shape[0] == 0 or frame.shape[1] == 0:
-                        self.health.record_error()
-                        return self.last_frame  # Return last good frame
-                    
-                    self.last_frame = frame
-                    self.last_frame_time = time.time()
-                    self.health.record_frame()
-                    self.health.frames_processed += 1
-                    # Reset error count on successful read
-                    self.health.decode_errors = 0
-                    return frame
-                else:
+                # Validate frame
+                if frame.size == 0 or frame.shape[0] == 0 or frame.shape[1] == 0:
                     self.health.record_error()
-                    
-                    # Only reconnect if we have MANY errors (more tolerant)
-                    if self.health.decode_errors > MAX_DECODE_ERRORS:
-                        logger.warning(f"Too many errors ({self.health.decode_errors}) on {self.name}, reconnecting...")
-                        self.health.decode_errors = 0
-                        # Don't block - reconnect in background
-                        self.reconnect()
-                    
-                    # Return last good frame if available
-                    if self.last_frame is not None:
-                        return self.last_frame
-                    return None
+                    return self.last_frame
+                
+                self.last_frame = frame
+                self.last_frame_time = time.time()
+                self.health.record_frame()
+                self.health.frames_processed += 1
+                return frame
+            else:
+                self.health.record_error()
+                
+                # Only schedule reconnect after MANY errors
+                if self.health.decode_errors > MAX_DECODE_ERRORS:
+                    logger.warning(f"Too many errors ({self.health.decode_errors}) on {self.name}, scheduling reconnect...")
+                    self.health.decode_errors = 0
+                    self.schedule_reconnect()
+                
+                return self.last_frame
+                
+        except Exception as e:
+            logger.error(f"Frame read error ({self.name}): {e}")
+            self.health.record_error()
+            return self.last_frame
                     
             except Exception as e:
                 logger.error(f"Frame read error ({self.name}): {e}")
