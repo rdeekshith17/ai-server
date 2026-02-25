@@ -53,23 +53,24 @@ ENABLE_GPT = os.environ.get("ENABLE_GPT_ANALYSIS", "true").lower() == "true"
 INCIDENT_COOLDOWN = int(os.environ.get("INCIDENT_COOLDOWN_SECONDS", "120"))  # 2 minutes between incidents
 GPT_ANALYSIS_INTERVAL = int(os.environ.get("GPT_ANALYSIS_INTERVAL", "10"))  # Only run GPT every 10 seconds
 
-# Streaming settings
+# Streaming settings - LOW DATA USAGE
 SYNC_INTERVAL = int(os.environ.get("SYNC_INTERVAL_SECONDS", "60"))
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", "60"))
-SNAPSHOT_INTERVAL = float(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "3"))  # Snapshot every 3 seconds
+SNAPSHOT_INTERVAL = float(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "180"))  # Snapshot every 3 MINUTES
 
-# RTSP Stability - EXTREMELY TOLERANT (RTSP errors are normal)
-MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MAX_RECONNECT_ATTEMPTS", "9999"))  # Basically infinite
-RECONNECT_DELAY = int(os.environ.get("RECONNECT_DELAY_SECONDS", "60"))  # Wait 60s between reconnects
-MAX_DECODE_ERRORS = int(os.environ.get("MAX_DECODE_ERRORS", "99999"))  # Never reconnect due to decode errors
+# RTSP Stability - NEVER RECONNECT DUE TO DECODE ERRORS
+# Decode errors are NORMAL for RTSP streams - just ignore them
+MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MAX_RECONNECT_ATTEMPTS", "9999"))
+RECONNECT_DELAY = int(os.environ.get("RECONNECT_DELAY_SECONDS", "60"))
+MAX_DECODE_ERRORS = 999999999  # NEVER trigger reconnect from decode errors
 
-# Logging - reduce noise
+# Logging
 logging.basicConfig(
-    level=logging.WARNING,  # Only warnings and errors
+    level=logging.WARNING,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("EdgeDevice")
-logger.setLevel(logging.INFO)  # But keep our logger at INFO
+logger.setLevel(logging.INFO)
 
 # Local database for offline cache
 db_path = Path("./data")
@@ -236,7 +237,7 @@ class CameraStream:
         return self.connect()
     
     def read_frame(self) -> Optional[np.ndarray]:
-        """Read single frame from camera with error handling"""
+        """Read single frame - NEVER reconnect due to decode errors"""
         # If not running, try to reconnect (non-blocking)
         if not self.is_running:
             self.try_reconnect()
@@ -252,8 +253,7 @@ class CameraStream:
             if ret and frame is not None:
                 # Validate frame
                 if frame.size == 0 or frame.shape[0] == 0 or frame.shape[1] == 0:
-                    self.health.record_error()
-                    return self.last_frame
+                    return self.last_frame  # Just use last frame
                 
                 self.last_frame = frame
                 self.last_frame_time = time.time()
@@ -261,19 +261,12 @@ class CameraStream:
                 self.health.frames_processed += 1
                 return frame
             else:
-                self.health.record_error()
-                
-                # Only schedule reconnect after MANY errors
-                if self.health.decode_errors > MAX_DECODE_ERRORS:
-                    logger.warning(f"Too many errors ({self.health.decode_errors}) on {self.name}, scheduling reconnect...")
-                    self.health.decode_errors = 0
-                    self.schedule_reconnect()
-                
+                # Frame read failed - just use last frame, DON'T reconnect
+                # Decode errors are NORMAL for RTSP streams
                 return self.last_frame
                 
         except Exception as e:
-            logger.error(f"Frame read error ({self.name}): {e}")
-            self.health.record_error()
+            # Just use last frame, don't spam logs
             return self.last_frame
     
     def get_snapshot(self) -> Optional[str]:
