@@ -237,7 +237,7 @@ class CameraStream:
         return self.connect()
     
     def read_frame(self) -> Optional[np.ndarray]:
-        """Read single frame from camera with error handling"""
+        """Read single frame - NEVER reconnect due to decode errors"""
         # If not running, try to reconnect (non-blocking)
         if not self.is_running:
             self.try_reconnect()
@@ -253,8 +253,7 @@ class CameraStream:
             if ret and frame is not None:
                 # Validate frame
                 if frame.size == 0 or frame.shape[0] == 0 or frame.shape[1] == 0:
-                    self.health.record_error()
-                    return self.last_frame
+                    return self.last_frame  # Just use last frame
                 
                 self.last_frame = frame
                 self.last_frame_time = time.time()
@@ -262,19 +261,12 @@ class CameraStream:
                 self.health.frames_processed += 1
                 return frame
             else:
-                self.health.record_error()
-                
-                # Only schedule reconnect after MANY errors
-                if self.health.decode_errors > MAX_DECODE_ERRORS:
-                    logger.warning(f"Too many errors ({self.health.decode_errors}) on {self.name}, scheduling reconnect...")
-                    self.health.decode_errors = 0
-                    self.schedule_reconnect()
-                
+                # Frame read failed - just use last frame, DON'T reconnect
+                # Decode errors are NORMAL for RTSP streams
                 return self.last_frame
                 
         except Exception as e:
-            logger.error(f"Frame read error ({self.name}): {e}")
-            self.health.record_error()
+            # Just use last frame, don't spam logs
             return self.last_frame
     
     def get_snapshot(self) -> Optional[str]:
