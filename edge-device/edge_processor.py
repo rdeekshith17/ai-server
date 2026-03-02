@@ -569,106 +569,175 @@ class MLDetector:
         logger.info(f"Loaded {len(self.watchlist_encodings)} watchlist entries")
 
 
-class GPTAnalyzer:
-    """GPT-5.2 Vision analysis for advanced threat detection"""
+class VisionAnalyzer:
+    """Vision AI analysis - supports Ollama (free/local) or Emergent (cloud)"""
     
     def __init__(self):
-        self.enabled = ENABLE_GPT and EMERGENT_LLM_KEY
+        global ai_model_status
         self.last_analysis_time = 0
-        self.min_analysis_interval = GPT_ANALYSIS_INTERVAL  # From config (default 10 seconds)
+        self.min_analysis_interval = GPT_ANALYSIS_INTERVAL
+        self.provider = AI_PROVIDER
         
+        # Check if vision AI is enabled and configured
+        if AI_PROVIDER == "ollama":
+            self.enabled = ENABLE_GPT
+            self._test_ollama_connection()
+        else:  # emergent
+            self.enabled = ENABLE_GPT and EMERGENT_LLM_KEY
+            if self.enabled:
+                ai_model_status["vision_ai"]["loaded"] = True
+                ai_model_status["vision_ai"]["status"] = "connected"
+                ai_model_status["vision_ai"]["provider"] = "emergent"
+            else:
+                ai_model_status["vision_ai"]["status"] = "no_api_key"
+    
+    def _test_ollama_connection(self):
+        """Test connection to Ollama server"""
+        global ai_model_status
+        try:
+            import requests
+            response = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
+            if response.status_code == 200:
+                models = response.json().get("models", [])
+                model_names = [m.get("name", "") for m in models]
+                if any(OLLAMA_MODEL in name for name in model_names):
+                    ai_model_status["vision_ai"]["loaded"] = True
+                    ai_model_status["vision_ai"]["status"] = "connected"
+                    ai_model_status["vision_ai"]["provider"] = f"ollama ({OLLAMA_MODEL})"
+                    logger.info(f"✅ Ollama connected - model: {OLLAMA_MODEL}")
+                else:
+                    ai_model_status["vision_ai"]["status"] = f"model {OLLAMA_MODEL} not found"
+                    logger.warning(f"Ollama connected but model '{OLLAMA_MODEL}' not found. Available: {model_names}")
+            else:
+                ai_model_status["vision_ai"]["status"] = "connection_failed"
+        except Exception as e:
+            ai_model_status["vision_ai"]["status"] = f"error: {str(e)[:30]}"
+            logger.error(f"Ollama connection failed: {e}")
+    
     async def analyze_scene(self, frame: np.ndarray, detections: List[Dict]) -> Dict:
-        """Analyze scene with GPT Vision - ONLY detect actual shoplifting"""
+        """Analyze scene for shoplifting using Ollama or Emergent"""
         if not self.enabled:
-            logger.debug("GPT disabled or no API key")
             return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
         
-        # Rate limit - only analyze every N seconds
+        # Rate limit
         now = time.time()
-        time_since_last = now - self.last_analysis_time
-        if time_since_last < self.min_analysis_interval:
-            # Don't log rate limiting - too noisy
+        if now - self.last_analysis_time < self.min_analysis_interval:
             return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False, "reason": "rate_limited"}
         
-        logger.info(f"🔍 Running GPT analysis ({len(detections)} people detected)...")
+        logger.info(f"🔍 Running {self.provider} analysis ({len(detections)} people)...")
         
-        try:
-            from emergentintegrations.llm.openai import chat_completion_with_image
-            
-            # Encode frame
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
-            img_base64 = base64.b64encode(buffer).decode('utf-8')
-            
-            prompt = f"""You are a shoplifting detection AI. Analyze this security camera image.
+        # Encode frame
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        img_base64 = base64.b64encode(buffer).decode('utf-8')
+        
+        prompt = f"""Analyze this security camera image for shoplifting.
 
-NUMBER OF PEOPLE: {len(detections)}
+People in frame: {len(detections)}
 
-⚠️ CRITICAL: Only return is_shoplifting=true if you see ACTUAL THEFT HAPPENING RIGHT NOW.
-
-SHOPLIFTING (return is_shoplifting=true):
-- Person putting store merchandise into their bag/pocket/clothing
+ONLY return is_shoplifting=true if you see ACTUAL THEFT:
+- Person hiding merchandise in clothing/bag
 - Person concealing items under jacket
 - Person removing security tags
-- Person walking to exit with hidden items
 
-NOT SHOPLIFTING (return is_shoplifting=false):
-- Normal shopping or browsing
-- Staff working/restocking
+Return is_shoplifting=false for:
+- Normal shopping
+- Staff restocking
 - Customer examining products
-- Person with hands in their own empty pockets
-- Customer carrying store basket/cart
 
-JSON Response only:
+JSON only:
 {{"is_shoplifting": false, "confidence": 0.0, "description": "what you see"}}
 
 or if theft:
-{{"is_shoplifting": true, "confidence": 0.9, "description": "specific theft action", "evidence": ["what you saw"]}}"""
+{{"is_shoplifting": true, "confidence": 0.9, "description": "theft action"}}"""
 
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: chat_completion_with_image(
-                    api_key=EMERGENT_LLM_KEY,
-                    image=img_base64,
-                    prompt=prompt,
-                    model="gpt-5.2"
-                )
-            )
+        try:
+            if self.provider == "ollama":
+                result = await self._analyze_with_ollama(img_base64, prompt)
+            else:
+                result = await self._analyze_with_emergent(img_base64, prompt)
             
             self.last_analysis_time = now
-            
-            # Parse response
-            if response and response.content:
-                content = response.content.strip()
-                if "{" in content:
-                    start = content.find("{")
-                    end = content.rfind("}") + 1
-                    json_str = content[start:end]
-                    result = json.loads(json_str)
-                    
-                    is_shoplifting = result.get("is_shoplifting", False)
-                    description = result.get("description", "")
-                    confidence = result.get("confidence", 0.5)
-                    
-                    # LOG EVERY GPT RESPONSE so we can see what it's detecting
-                    if is_shoplifting:
-                        logger.warning(f"🚨 GPT DETECTED SHOPLIFTING: {description} (conf: {confidence})")
-                    else:
-                        logger.info(f"👁️ GPT Analysis: {description[:80]} (safe, conf: {confidence})")
-                    
-                    return {
-                        "analyzed": True,
-                        "threat_level": "critical" if is_shoplifting else "safe",
-                        "confidence": confidence,
-                        "description": description,
-                        "behaviors_detected": result.get("evidence", []),
-                        "is_shoplifting": is_shoplifting
-                    }
-            
-            return {"analyzed": False, "threat_level": "unknown"}
+            return result
             
         except Exception as e:
-            logger.error(f"GPT analysis error: {e}")
-            return {"analyzed": False, "threat_level": "unknown", "error": str(e)}
+            logger.error(f"Vision analysis error: {e}")
+            return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False, "error": str(e)}
+    
+    async def _analyze_with_ollama(self, img_base64: str, prompt: str) -> Dict:
+        """Use Ollama for local vision analysis (FREE)"""
+        import requests
+        
+        response = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: requests.post(
+                f"{OLLAMA_URL}/api/generate",
+                json={
+                    "model": OLLAMA_MODEL,
+                    "prompt": prompt,
+                    "images": [img_base64],
+                    "stream": False
+                },
+                timeout=30
+            )
+        )
+        
+        if response.status_code == 200:
+            content = response.json().get("response", "")
+            return self._parse_response(content)
+        else:
+            logger.error(f"Ollama error: {response.status_code}")
+            return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
+    
+    async def _analyze_with_emergent(self, img_base64: str, prompt: str) -> Dict:
+        """Use Emergent LLM for cloud vision analysis"""
+        from emergentintegrations.llm.openai import chat_completion_with_image
+        
+        response = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: chat_completion_with_image(
+                api_key=EMERGENT_LLM_KEY,
+                image=img_base64,
+                prompt=prompt,
+                model="gpt-5.2"
+            )
+        )
+        
+        if response and response.content:
+            return self._parse_response(response.content)
+        
+        return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
+    
+    def _parse_response(self, content: str) -> Dict:
+        """Parse JSON response from vision AI"""
+        try:
+            content = content.strip()
+            if "{" in content:
+                start = content.find("{")
+                end = content.rfind("}") + 1
+                json_str = content[start:end]
+                result = json.loads(json_str)
+                
+                is_shoplifting = result.get("is_shoplifting", False)
+                description = result.get("description", "")
+                confidence = result.get("confidence", 0.5)
+                
+                if is_shoplifting:
+                    logger.warning(f"🚨 SHOPLIFTING DETECTED: {description} (conf: {confidence})")
+                else:
+                    logger.info(f"👁️ Analysis: {description[:60]} (safe)")
+                
+                return {
+                    "analyzed": True,
+                    "threat_level": "critical" if is_shoplifting else "safe",
+                    "confidence": confidence,
+                    "description": description,
+                    "behaviors_detected": result.get("evidence", []),
+                    "is_shoplifting": is_shoplifting
+                }
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse response: {e}")
+        
+        return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
 
 
 class CentralServerSync:
