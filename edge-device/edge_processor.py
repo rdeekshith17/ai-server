@@ -1054,10 +1054,10 @@ class EdgeProcessor:
             return None  # Cooldown active
         
         camera.last_incident_time = current_time
-        return await self.create_incident(camera, frame, detections, [], gpt_result, watchlist_match)
+        return await self.create_incident(camera, frame, detections, [], vision_result, watchlist_match)
     
     async def create_incident(self, camera: CameraStream, frame: np.ndarray, 
-                            detections: List, poses: List, gpt_result: Dict,
+                            detections: List, poses: List, vision_result: Dict,
                             watchlist_match: Optional[Dict] = None) -> Dict:
         """Create and upload CRITICAL shoplifting incident"""
         
