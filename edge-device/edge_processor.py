@@ -785,7 +785,8 @@ class CentralServerSync:
     
     async def send_heartbeat(self, cameras_online: int, cameras_total: int, 
                             stream_health: List[Dict] = None) -> bool:
-        """Send heartbeat with health data"""
+        """Send heartbeat with health data and AI model status"""
+        global ai_model_status
         try:
             response = await self.http_client.post(
                 f"{self.server_url}/api/edge/heartbeat",
@@ -796,6 +797,7 @@ class CentralServerSync:
                     "cameras_total": cameras_total,
                     "device_name": DEVICE_NAME,
                     "stream_health": stream_health or [],
+                    "ai_model_status": ai_model_status,  # Send AI status to server
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
             )
