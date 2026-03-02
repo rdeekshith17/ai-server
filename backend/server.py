@@ -2262,6 +2262,52 @@ async def get_camera_snapshot(request: Request, camera_id: str):
     return snapshot
 
 
+@api_router.get("/edge/ai-status/{client_id}")
+async def get_edge_ai_status(request: Request, client_id: str):
+    """Get AI model status from edge device for a client"""
+    user = await require_auth(request)
+    
+    # Check permission
+    if user.get("role") != UserRole.SUPER_ADMIN and user.get("client_id") != client_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Get edge device for this client
+    edge_device = await db.edge_devices.find_one(
+        {"client_id": client_id},
+        {"_id": 0}
+    )
+    
+    if not edge_device:
+        return {
+            "success": False,
+            "message": "No edge device found",
+            "ai_status": None
+        }
+    
+    # Check if device is online (heartbeat within last 5 minutes)
+    last_heartbeat = edge_device.get("last_heartbeat")
+    is_online = False
+    if last_heartbeat:
+        try:
+            hb_time = datetime.fromisoformat(last_heartbeat.replace("Z", "+00:00"))
+            is_online = (datetime.now(timezone.utc) - hb_time).total_seconds() < 300
+        except:
+            pass
+    
+    return {
+        "success": True,
+        "device_name": edge_device.get("device_name"),
+        "is_online": is_online,
+        "last_heartbeat": last_heartbeat,
+        "ai_model_status": edge_device.get("ai_model_status", {
+            "yolo": {"enabled": True, "loaded": False, "status": "unknown"},
+            "pose": {"enabled": False, "loaded": False, "status": "unknown"},
+            "deepface": {"enabled": False, "loaded": False, "status": "unknown"},
+            "vision_ai": {"enabled": True, "loaded": False, "status": "unknown", "provider": "unknown"}
+        })
+    }
+
+
 @api_router.post("/edge/incidents")
 async def upload_incident(data: IncidentUpload):
     """Receive incident from edge device"""
