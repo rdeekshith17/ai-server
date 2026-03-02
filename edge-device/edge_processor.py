@@ -986,20 +986,66 @@ class EdgeProcessor:
                         match
                     )
         
-        # Step 3: GPT Analysis (only way to detect new shoplifters)
+        # Step 3: Pose detection for suspicious behavior (if enabled)
+        suspicious_poses = []
+        if ENABLE_POSE:
+            poses = self.detector.detect_poses(frame)
+            for pose in poses:
+                status = pose.get("pose_status", "normal")
+                if status in ["suspicious_hands", "crouching", "concealing"]:
+                    suspicious_poses.append(status)
+            
+            if suspicious_poses:
+                # Track suspicious frames
+                camera_id = camera.camera_id
+                if camera_id not in self.suspicious_tracker:
+                    self.suspicious_tracker[camera_id] = {"count": 0, "last_time": 0}
+                
+                tracker = self.suspicious_tracker[camera_id]
+                current_time = time.time()
+                
+                # Reset if too much time passed
+                if current_time - tracker["last_time"] > 5:
+                    tracker["count"] = 1
+                else:
+                    tracker["count"] += 1
+                tracker["last_time"] = current_time
+                
+                # Only proceed if enough suspicious frames
+                if tracker["count"] < MIN_SUSPICIOUS_FRAMES:
+                    return None
+                
+                logger.info(f"⚠️ Suspicious pose detected: {suspicious_poses} (frame {tracker['count']})")
+        
+        # Step 4: Vision AI Analysis
         if not ENABLE_GPT:
+            # If GPT disabled but pose detected suspicious behavior, create incident
+            if suspicious_poses and not REQUIRE_GPT_CONFIRMATION:
+                return await self._create_incident_if_allowed(
+                    camera, frame, detections,
+                    {
+                        "analyzed": False,
+                        "threat_level": "critical",
+                        "confidence": 0.7,
+                        "description": f"Suspicious behavior: {', '.join(suspicious_poses)}",
+                        "behaviors_detected": suspicious_poses,
+                        "is_shoplifting": True
+                    },
+                    None
+                )
             return None
         
-        gpt_result = await self.gpt_analyzer.analyze_scene(frame, detections)
+        # Run vision AI (Ollama or Emergent)
+        vision_result = await self.vision_analyzer.analyze_scene(frame, detections)
         
-        # Only create incident if GPT confirms ACTUAL SHOPLIFTING
-        if gpt_result.get("is_shoplifting") == True:
-            logger.warning(f"🚨 SHOPLIFTING: {gpt_result.get('description', '')[:80]}")
-            return await self._create_incident_if_allowed(camera, frame, detections, gpt_result, None)
+        # Only create incident if AI confirms ACTUAL SHOPLIFTING
+        if vision_result.get("is_shoplifting") == True:
+            logger.warning(f"🚨 SHOPLIFTING: {vision_result.get('description', '')[:80]}")
+            return await self._create_incident_if_allowed(camera, frame, detections, vision_result, None)
         
         return None
     
-    async def _create_incident_if_allowed(self, camera, frame, detections, gpt_result, watchlist_match):
+    async def _create_incident_if_allowed(self, camera, frame, detections, vision_result, watchlist_match):
         """Create CRITICAL incident if cooldown allows"""
         current_time = time.time()
         camera_last_incident = getattr(camera, 'last_incident_time', 0)
