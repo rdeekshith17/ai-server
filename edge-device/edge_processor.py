@@ -550,12 +550,17 @@ class GPTAnalyzer:
     async def analyze_scene(self, frame: np.ndarray, detections: List[Dict]) -> Dict:
         """Analyze scene with GPT Vision - ONLY detect actual shoplifting"""
         if not self.enabled:
+            logger.debug("GPT disabled or no API key")
             return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
         
         # Rate limit - only analyze every N seconds
         now = time.time()
-        if now - self.last_analysis_time < self.min_analysis_interval:
+        time_since_last = now - self.last_analysis_time
+        if time_since_last < self.min_analysis_interval:
+            # Don't log rate limiting - too noisy
             return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False, "reason": "rate_limited"}
+        
+        logger.info(f"🔍 Running GPT analysis ({len(detections)} people detected)...")
         
         try:
             from emergentintegrations.llm.openai import chat_completion_with_image
