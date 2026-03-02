@@ -180,6 +180,20 @@ Build a shoplifting detection system for liquor stores, convenience stores and g
 
 ## Change Log
 
+### March 2, 2026
+- **Ollama Integration Completed** - Edge processor now supports local Ollama for free vision AI
+  - Added `AI_PROVIDER` env var to switch between "ollama" (local) and "emergent" (cloud)
+  - Added vision model detection warning (llama3 is text-only, need llava/bakllava for images)
+  - VisionAnalyzer class supports both Ollama and Emergent LLM
+- **AI Model Status Dashboard** - Admin AI Control page now shows live edge device status
+  - Added `GET /api/edge/ai-status/{client_id}` endpoint
+  - Edge device banner shows online/offline status
+  - Model cards display "Enabled/Disabled" and "Connected/No Data" badges
+  - Vision AI shows provider info (ollama/emergent)
+- **Code Sync** - Synchronized `/app/backend/server.py` with `/app/central-server/server.py`
+- **Downloadable Files Updated** - `/frontend/public/server_latest.py` and `edge_processor_latest.py`
+- All 9 backend + frontend tests passed (100%)
+
 ### February 15, 2026
 - Added **Live Cameras** page with real-time snapshot display
 - Added `POST /api/edge/snapshots` endpoint for edge devices to upload camera frames
