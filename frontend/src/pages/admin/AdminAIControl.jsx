@@ -11,7 +11,10 @@ import {
   Scan,
   MessageSquare,
   AlertTriangle,
-  CheckCircle
+  CheckCircle,
+  Wifi,
+  WifiOff,
+  Server
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
@@ -31,6 +34,11 @@ import { motion } from "framer-motion";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
+const getAuthHeaders = () => {
+  const token = localStorage.getItem('session_token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 export default function AdminAIControl() {
   const [clients, setClients] = useState([]);
   const [selectedClient, setSelectedClient] = useState(null);
@@ -38,6 +46,7 @@ export default function AdminAIControl() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [mlStatus, setMlStatus] = useState(null);
+  const [edgeAiStatus, setEdgeAiStatus] = useState(null);
 
   useEffect(() => {
     fetchClients();
@@ -47,12 +56,16 @@ export default function AdminAIControl() {
   useEffect(() => {
     if (selectedClient) {
       fetchClientSettings(selectedClient);
+      fetchEdgeAIStatus(selectedClient);
     }
   }, [selectedClient]);
 
   const fetchClients = async () => {
     try {
-      const response = await axios.get(`${API}/admin/clients?limit=100`, { withCredentials: true });
+      const response = await axios.get(`${API}/admin/clients?limit=100`, { 
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
       setClients(response.data.clients || []);
       if (response.data.clients?.length > 0) {
         setSelectedClient(response.data.clients[0].client_id);
@@ -67,16 +80,35 @@ export default function AdminAIControl() {
 
   const fetchMLStatus = async () => {
     try {
-      const response = await axios.get(`${API}/ml/status`, { withCredentials: true });
+      const response = await axios.get(`${API}/ml/status`, { 
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
       setMlStatus(response.data);
     } catch (error) {
       console.error("Failed to fetch ML status:", error);
     }
   };
 
+  const fetchEdgeAIStatus = async (clientId) => {
+    try {
+      const response = await axios.get(`${API}/edge/ai-status/${clientId}`, { 
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
+      setEdgeAiStatus(response.data);
+    } catch (error) {
+      console.error("Failed to fetch edge AI status:", error);
+      setEdgeAiStatus(null);
+    }
+  };
+
   const fetchClientSettings = async (clientId) => {
     try {
-      const response = await axios.get(`${API}/admin/ai/settings/${clientId}`, { withCredentials: true });
+      const response = await axios.get(`${API}/admin/ai/settings/${clientId}`, { 
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
       setSettings(response.data.settings);
     } catch (error) {
       console.error("Failed to fetch AI settings:", error);
