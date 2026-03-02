@@ -273,12 +273,46 @@ export default function AdminAIControl() {
 
       {selectedClient && settings && (
         <>
+          {/* Edge Device Status Banner */}
+          {edgeAiStatus && (
+            <Card className={`border ${edgeAiStatus.is_online ? 'bg-emerald-500/5 border-emerald-500/30' : 'bg-amber-500/5 border-amber-500/30'}`}>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  {edgeAiStatus.is_online ? (
+                    <Wifi className="w-5 h-5 text-emerald-500" />
+                  ) : (
+                    <WifiOff className="w-5 h-5 text-amber-500" />
+                  )}
+                  <div className="flex-1">
+                    <p className="font-medium">
+                      Edge Device: {edgeAiStatus.device_name || 'Unknown'}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {edgeAiStatus.is_online 
+                        ? `Online - Last heartbeat: ${edgeAiStatus.last_heartbeat ? new Date(edgeAiStatus.last_heartbeat).toLocaleTimeString() : 'Just now'}`
+                        : 'Offline - No recent heartbeat'
+                      }
+                    </p>
+                  </div>
+                  <Button 
+                    variant="ghost" 
+                    size="sm"
+                    onClick={() => fetchEdgeAIStatus(selectedClient)}
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* ML Models */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {models.map((model, idx) => {
               const colors = colorClasses[model.color];
               const ModelIcon = model.icon;
               const enabled = settings[model.key];
+              const edgeStatus = getEdgeStatus(model.key);
               
               return (
                 <motion.div
@@ -297,6 +331,13 @@ export default function AdminAIControl() {
                           <div>
                             <h3 className="font-semibold">{model.name}</h3>
                             <p className="text-xs text-muted-foreground">{model.description}</p>
+                            {/* Show provider for Vision AI */}
+                            {model.key === "enable_gpt_analysis" && edgeStatus.provider && edgeStatus.provider !== "unknown" && (
+                              <p className="text-xs text-cyan-400 mt-1">
+                                <Server className="w-3 h-3 inline mr-1" />
+                                {edgeStatus.provider}
+                              </p>
+                            )}
                           </div>
                         </div>
                         <Switch
@@ -304,29 +345,45 @@ export default function AdminAIControl() {
                           onCheckedChange={(checked) => setSettings({ ...settings, [model.key]: checked })}
                         />
                       </div>
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
+                        {/* Settings Status Badge */}
                         <Badge 
                           variant="outline"
-                          className={model.status === "active" 
-                            ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/30"
+                          className={enabled 
+                            ? "bg-blue-500/10 text-blue-400 border-blue-500/30"
                             : "bg-gray-500/10 text-gray-500 border-gray-500/30"
                           }
                         >
-                          {model.status === "active" ? (
+                          {enabled ? 'Enabled' : 'Disabled'}
+                        </Badge>
+                        
+                        {/* Edge Device Connection Badge */}
+                        <Badge 
+                          variant="outline"
+                          className={edgeStatus.loaded 
+                            ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/30"
+                            : edgeStatus.status === "unknown"
+                            ? "bg-gray-500/10 text-gray-400 border-gray-500/30"
+                            : "bg-red-500/10 text-red-400 border-red-500/30"
+                          }
+                        >
+                          {edgeStatus.loaded ? (
                             <>
                               <CheckCircle className="w-3 h-3 mr-1" />
-                              Active
+                              Connected
+                            </>
+                          ) : edgeStatus.status === "unknown" ? (
+                            <>
+                              <WifiOff className="w-3 h-3 mr-1" />
+                              No Data
                             </>
                           ) : (
                             <>
                               <AlertTriangle className="w-3 h-3 mr-1" />
-                              Inactive
+                              {edgeStatus.status}
                             </>
                           )}
                         </Badge>
-                        <span className={`text-xs ${enabled ? colors.text : 'text-muted-foreground'}`}>
-                          {enabled ? 'Enabled' : 'Disabled'} for {getClientName(selectedClient)}
-                        </span>
                       </div>
                     </CardContent>
                   </Card>
