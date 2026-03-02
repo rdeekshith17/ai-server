@@ -550,12 +550,17 @@ class GPTAnalyzer:
     async def analyze_scene(self, frame: np.ndarray, detections: List[Dict]) -> Dict:
         """Analyze scene with GPT Vision - ONLY detect actual shoplifting"""
         if not self.enabled:
+            logger.debug("GPT disabled or no API key")
             return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
         
         # Rate limit - only analyze every N seconds
         now = time.time()
-        if now - self.last_analysis_time < self.min_analysis_interval:
+        time_since_last = now - self.last_analysis_time
+        if time_since_last < self.min_analysis_interval:
+            # Don't log rate limiting - too noisy
             return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False, "reason": "rate_limited"}
+        
+        logger.info(f"🔍 Running GPT analysis ({len(detections)} people detected)...")
         
         try:
             from emergentintegrations.llm.openai import chat_completion_with_image
@@ -611,11 +616,20 @@ or if theft:
                     result = json.loads(json_str)
                     
                     is_shoplifting = result.get("is_shoplifting", False)
+                    description = result.get("description", "")
+                    confidence = result.get("confidence", 0.5)
+                    
+                    # LOG EVERY GPT RESPONSE so we can see what it's detecting
+                    if is_shoplifting:
+                        logger.warning(f"🚨 GPT DETECTED SHOPLIFTING: {description} (conf: {confidence})")
+                    else:
+                        logger.info(f"👁️ GPT Analysis: {description[:80]} (safe, conf: {confidence})")
+                    
                     return {
                         "analyzed": True,
                         "threat_level": "critical" if is_shoplifting else "safe",
-                        "confidence": result.get("confidence", 0.5),
-                        "description": result.get("description", ""),
+                        "confidence": confidence,
+                        "description": description,
                         "behaviors_detected": result.get("evidence", []),
                         "is_shoplifting": is_shoplifting
                     }
