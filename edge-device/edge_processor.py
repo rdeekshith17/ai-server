@@ -855,17 +855,19 @@ class EdgeProcessor:
     def __init__(self):
         self.sync = CentralServerSync(CENTRAL_SERVER_URL, CLIENT_ID, API_KEY)
         self.detector = MLDetector()
-        self.gpt_analyzer = GPTAnalyzer()
+        self.vision_analyzer = VisionAnalyzer()  # Renamed from gpt_analyzer
         self.cameras: Dict[str, CameraStream] = {}
         self.config = {}
         self.is_running = True
         self.detection_count = 0
         self.incident_count = 0
+        self.suspicious_tracker: Dict[str, Dict] = {}  # Track suspicious frames
         
     async def initialize(self):
         """Initialize edge processor"""
         logger.info("=" * 50)
         logger.info("SecureGuard Edge Device Starting")
+        logger.info(f"AI Provider: {AI_PROVIDER.upper()}")
         logger.info("=" * 50)
         
         # Register with central server
@@ -884,6 +886,12 @@ class EdgeProcessor:
         # Connect to cameras
         await self.setup_cameras()
         
+        # Log AI model status
+        logger.info("=" * 50)
+        logger.info("AI Model Status:")
+        for model, status in ai_model_status.items():
+            icon = "✅" if status["loaded"] else "❌"
+            logger.info(f"  {icon} {model}: {status['status']}")
         logger.info("=" * 50)
         logger.info("Edge Device Ready")
         logger.info("=" * 50)
