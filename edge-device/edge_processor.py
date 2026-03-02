@@ -611,11 +611,20 @@ or if theft:
                     result = json.loads(json_str)
                     
                     is_shoplifting = result.get("is_shoplifting", False)
+                    description = result.get("description", "")
+                    confidence = result.get("confidence", 0.5)
+                    
+                    # LOG EVERY GPT RESPONSE so we can see what it's detecting
+                    if is_shoplifting:
+                        logger.warning(f"🚨 GPT DETECTED SHOPLIFTING: {description} (conf: {confidence})")
+                    else:
+                        logger.info(f"👁️ GPT Analysis: {description[:80]} (safe, conf: {confidence})")
+                    
                     return {
                         "analyzed": True,
                         "threat_level": "critical" if is_shoplifting else "safe",
-                        "confidence": result.get("confidence", 0.5),
-                        "description": result.get("description", ""),
+                        "confidence": confidence,
+                        "description": description,
                         "behaviors_detected": result.get("evidence", []),
                         "is_shoplifting": is_shoplifting
                     }
