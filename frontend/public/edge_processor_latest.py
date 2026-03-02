@@ -40,29 +40,45 @@ CENTRAL_SERVER_URL = os.environ.get("CENTRAL_SERVER_URL", "http://localhost:8001
 CLIENT_ID = os.environ.get("CLIENT_ID", "")
 API_KEY = os.environ.get("API_KEY", "")
 DEVICE_NAME = os.environ.get("DEVICE_NAME", "Edge-Device-001")
+
+# AI Provider Selection: "ollama" (free/local) or "emergent" (cloud API)
+AI_PROVIDER = os.environ.get("AI_PROVIDER", "ollama").lower()
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 
-# Processing settings - STABLE configuration
-DETECTION_INTERVAL = float(os.environ.get("DETECTION_INTERVAL", "1.0"))  # 1 FPS (very stable)
-CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.6"))  # Higher = fewer detections
-ENABLE_POSE = False  # DISABLED - not needed for shoplifting detection
-ENABLE_FACE = os.environ.get("ENABLE_FACE_RECOGNITION", "true").lower() == "true"
+# Ollama Configuration (FREE local AI)
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llava")  # or "bakllava", "llava-llama3"
+
+# Processing settings
+DETECTION_INTERVAL = float(os.environ.get("DETECTION_INTERVAL", "0.5"))
+CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.5"))
+ENABLE_POSE = os.environ.get("ENABLE_POSE_DETECTION", "true").lower() == "true"
+ENABLE_FACE = os.environ.get("ENABLE_FACE_RECOGNITION", "false").lower() == "true"
 ENABLE_GPT = os.environ.get("ENABLE_GPT_ANALYSIS", "true").lower() == "true"
 
-# Shoplifting detection - GPT ONLY
-INCIDENT_COOLDOWN = int(os.environ.get("INCIDENT_COOLDOWN_SECONDS", "120"))  # 2 minutes between incidents
-GPT_ANALYSIS_INTERVAL = int(os.environ.get("GPT_ANALYSIS_INTERVAL", "10"))  # Only run GPT every 10 seconds
+# Shoplifting detection
+INCIDENT_COOLDOWN = int(os.environ.get("INCIDENT_COOLDOWN_SECONDS", "60"))
+GPT_ANALYSIS_INTERVAL = float(os.environ.get("GPT_ANALYSIS_INTERVAL", "2"))
+MIN_SUSPICIOUS_FRAMES = int(os.environ.get("MIN_SUSPICIOUS_FRAMES", "3"))
+REQUIRE_GPT_CONFIRMATION = os.environ.get("REQUIRE_GPT_CONFIRMATION", "true").lower() == "true"
 
-# Streaming settings - LOW DATA USAGE
+# Streaming settings
 SYNC_INTERVAL = int(os.environ.get("SYNC_INTERVAL_SECONDS", "60"))
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", "60"))
-SNAPSHOT_INTERVAL = float(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "180"))  # Snapshot every 3 MINUTES
+SNAPSHOT_INTERVAL = float(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "180"))
 
-# RTSP Stability - NEVER RECONNECT DUE TO DECODE ERRORS
-# Decode errors are NORMAL for RTSP streams - just ignore them
+# RTSP Stability
 MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MAX_RECONNECT_ATTEMPTS", "9999"))
 RECONNECT_DELAY = int(os.environ.get("RECONNECT_DELAY_SECONDS", "60"))
-MAX_DECODE_ERRORS = 999999999  # NEVER trigger reconnect from decode errors
+MAX_DECODE_ERRORS = 999999999
+
+# Track AI model status (for admin console)
+ai_model_status = {
+    "yolo": {"enabled": True, "loaded": False, "status": "not_loaded"},
+    "pose": {"enabled": ENABLE_POSE, "loaded": False, "status": "not_loaded"},
+    "deepface": {"enabled": ENABLE_FACE, "loaded": False, "status": "not_loaded"},
+    "vision_ai": {"enabled": ENABLE_GPT, "loaded": False, "status": "not_loaded", "provider": AI_PROVIDER}
+}
 
 # Logging
 logging.basicConfig(
@@ -310,15 +326,19 @@ class MLDetector:
         self.watchlist_encodings = []
         
     def initialize(self):
-        """Initialize ML models"""
+        """Initialize ML models and update status"""
+        global ai_model_status
         logger.info("Initializing ML models...")
         
-        # YOLO for person detection
+        # YOLO for person detection (always required)
         try:
             from ultralytics import YOLO
             self.yolo_model = YOLO("yolov8n.pt")
+            ai_model_status["yolo"]["loaded"] = True
+            ai_model_status["yolo"]["status"] = "connected"
             logger.info("✅ YOLO model loaded")
         except Exception as e:
+            ai_model_status["yolo"]["status"] = f"error: {str(e)[:50]}"
             logger.error(f"Failed to load YOLO: {e}")
         
         # Pose estimation
@@ -326,9 +346,14 @@ class MLDetector:
             try:
                 from ultralytics import YOLO
                 self.pose_model = YOLO("yolov8n-pose.pt")
+                ai_model_status["pose"]["loaded"] = True
+                ai_model_status["pose"]["status"] = "connected"
                 logger.info("✅ Pose model loaded")
             except Exception as e:
+                ai_model_status["pose"]["status"] = f"error: {str(e)[:50]}"
                 logger.error(f"Failed to load pose model: {e}")
+        else:
+            ai_model_status["pose"]["status"] = "disabled"
         
         # DeepFace for face recognition
         if ENABLE_FACE:
@@ -341,9 +366,14 @@ class MLDetector:
                 except:
                     pass
                 self.deepface_initialized = True
+                ai_model_status["deepface"]["loaded"] = True
+                ai_model_status["deepface"]["status"] = "connected"
                 logger.info("✅ DeepFace initialized")
             except Exception as e:
+                ai_model_status["deepface"]["status"] = f"error: {str(e)[:50]}"
                 logger.error(f"Failed to initialize DeepFace: {e}")
+        else:
+            ai_model_status["deepface"]["status"] = "disabled"
     
     def detect_persons(self, frame: np.ndarray) -> List[Dict]:
         """Detect persons in frame using YOLO"""
@@ -539,106 +569,188 @@ class MLDetector:
         logger.info(f"Loaded {len(self.watchlist_encodings)} watchlist entries")
 
 
-class GPTAnalyzer:
-    """GPT-5.2 Vision analysis for advanced threat detection"""
+class VisionAnalyzer:
+    """Vision AI analysis - supports Ollama (free/local) or Emergent (cloud)"""
     
     def __init__(self):
-        self.enabled = ENABLE_GPT and EMERGENT_LLM_KEY
+        global ai_model_status
         self.last_analysis_time = 0
-        self.min_analysis_interval = GPT_ANALYSIS_INTERVAL  # From config (default 10 seconds)
+        self.min_analysis_interval = GPT_ANALYSIS_INTERVAL
+        self.provider = AI_PROVIDER
         
-    async def analyze_scene(self, frame: np.ndarray, detections: List[Dict]) -> Dict:
-        """Analyze scene with GPT Vision - ONLY detect actual shoplifting"""
-        if not self.enabled:
-            logger.debug("GPT disabled or no API key")
-            return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
+        # Check if vision AI is enabled and configured
+        if AI_PROVIDER == "ollama":
+            self.enabled = ENABLE_GPT
+            self._test_ollama_connection()
+        else:  # emergent
+            self.enabled = ENABLE_GPT and EMERGENT_LLM_KEY
+            if self.enabled:
+                ai_model_status["vision_ai"]["loaded"] = True
+                ai_model_status["vision_ai"]["status"] = "connected"
+                ai_model_status["vision_ai"]["provider"] = "emergent"
+            else:
+                ai_model_status["vision_ai"]["status"] = "no_api_key"
+    
+    def _test_ollama_connection(self):
+        """Test connection to Ollama server"""
+        global ai_model_status
         
-        # Rate limit - only analyze every N seconds
-        now = time.time()
-        time_since_last = now - self.last_analysis_time
-        if time_since_last < self.min_analysis_interval:
-            # Don't log rate limiting - too noisy
-            return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False, "reason": "rate_limited"}
+        # Vision-capable models in Ollama
+        VISION_MODELS = ["llava", "bakllava", "llava-llama3", "moondream", "cogvlm"]
         
-        logger.info(f"🔍 Running GPT analysis ({len(detections)} people detected)...")
+        # Warn if using a non-vision model
+        is_vision_model = any(vm in OLLAMA_MODEL.lower() for vm in VISION_MODELS)
+        if not is_vision_model:
+            logger.warning(f"⚠️ Model '{OLLAMA_MODEL}' may not support images. For vision analysis, use: llava, bakllava, or llava-llama3")
         
         try:
-            from emergentintegrations.llm.openai import chat_completion_with_image
-            
-            # Encode frame
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
-            img_base64 = base64.b64encode(buffer).decode('utf-8')
-            
-            prompt = f"""You are a shoplifting detection AI. Analyze this security camera image.
+            import requests
+            response = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
+            if response.status_code == 200:
+                models = response.json().get("models", [])
+                model_names = [m.get("name", "") for m in models]
+                if any(OLLAMA_MODEL in name for name in model_names):
+                    ai_model_status["vision_ai"]["loaded"] = True
+                    ai_model_status["vision_ai"]["status"] = "connected"
+                    ai_model_status["vision_ai"]["provider"] = f"ollama ({OLLAMA_MODEL})"
+                    if is_vision_model:
+                        logger.info(f"✅ Ollama connected - vision model: {OLLAMA_MODEL}")
+                    else:
+                        logger.warning(f"⚠️ Ollama connected - model: {OLLAMA_MODEL} (NOT a vision model)")
+                        ai_model_status["vision_ai"]["status"] = "connected (text-only)"
+                else:
+                    ai_model_status["vision_ai"]["status"] = f"model {OLLAMA_MODEL} not found"
+                    logger.warning(f"Ollama connected but model '{OLLAMA_MODEL}' not found. Available: {model_names}")
+            else:
+                ai_model_status["vision_ai"]["status"] = "connection_failed"
+        except Exception as e:
+            ai_model_status["vision_ai"]["status"] = f"error: {str(e)[:30]}"
+            logger.error(f"Ollama connection failed: {e}")
+    
+    async def analyze_scene(self, frame: np.ndarray, detections: List[Dict]) -> Dict:
+        """Analyze scene for shoplifting using Ollama or Emergent"""
+        if not self.enabled:
+            return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
+        
+        # Rate limit
+        now = time.time()
+        if now - self.last_analysis_time < self.min_analysis_interval:
+            return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False, "reason": "rate_limited"}
+        
+        logger.info(f"🔍 Running {self.provider} analysis ({len(detections)} people)...")
+        
+        # Encode frame
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        img_base64 = base64.b64encode(buffer).decode('utf-8')
+        
+        prompt = f"""Analyze this security camera image for shoplifting.
 
-NUMBER OF PEOPLE: {len(detections)}
+People in frame: {len(detections)}
 
-⚠️ CRITICAL: Only return is_shoplifting=true if you see ACTUAL THEFT HAPPENING RIGHT NOW.
-
-SHOPLIFTING (return is_shoplifting=true):
-- Person putting store merchandise into their bag/pocket/clothing
+ONLY return is_shoplifting=true if you see ACTUAL THEFT:
+- Person hiding merchandise in clothing/bag
 - Person concealing items under jacket
 - Person removing security tags
-- Person walking to exit with hidden items
 
-NOT SHOPLIFTING (return is_shoplifting=false):
-- Normal shopping or browsing
-- Staff working/restocking
+Return is_shoplifting=false for:
+- Normal shopping
+- Staff restocking
 - Customer examining products
-- Person with hands in their own empty pockets
-- Customer carrying store basket/cart
 
-JSON Response only:
+JSON only:
 {{"is_shoplifting": false, "confidence": 0.0, "description": "what you see"}}
 
 or if theft:
-{{"is_shoplifting": true, "confidence": 0.9, "description": "specific theft action", "evidence": ["what you saw"]}}"""
+{{"is_shoplifting": true, "confidence": 0.9, "description": "theft action"}}"""
 
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: chat_completion_with_image(
-                    api_key=EMERGENT_LLM_KEY,
-                    image=img_base64,
-                    prompt=prompt,
-                    model="gpt-5.2"
-                )
-            )
+        try:
+            if self.provider == "ollama":
+                result = await self._analyze_with_ollama(img_base64, prompt)
+            else:
+                result = await self._analyze_with_emergent(img_base64, prompt)
             
             self.last_analysis_time = now
-            
-            # Parse response
-            if response and response.content:
-                content = response.content.strip()
-                if "{" in content:
-                    start = content.find("{")
-                    end = content.rfind("}") + 1
-                    json_str = content[start:end]
-                    result = json.loads(json_str)
-                    
-                    is_shoplifting = result.get("is_shoplifting", False)
-                    description = result.get("description", "")
-                    confidence = result.get("confidence", 0.5)
-                    
-                    # LOG EVERY GPT RESPONSE so we can see what it's detecting
-                    if is_shoplifting:
-                        logger.warning(f"🚨 GPT DETECTED SHOPLIFTING: {description} (conf: {confidence})")
-                    else:
-                        logger.info(f"👁️ GPT Analysis: {description[:80]} (safe, conf: {confidence})")
-                    
-                    return {
-                        "analyzed": True,
-                        "threat_level": "critical" if is_shoplifting else "safe",
-                        "confidence": confidence,
-                        "description": description,
-                        "behaviors_detected": result.get("evidence", []),
-                        "is_shoplifting": is_shoplifting
-                    }
-            
-            return {"analyzed": False, "threat_level": "unknown"}
+            return result
             
         except Exception as e:
-            logger.error(f"GPT analysis error: {e}")
-            return {"analyzed": False, "threat_level": "unknown", "error": str(e)}
+            logger.error(f"Vision analysis error: {e}")
+            return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False, "error": str(e)}
+    
+    async def _analyze_with_ollama(self, img_base64: str, prompt: str) -> Dict:
+        """Use Ollama for local vision analysis (FREE)"""
+        import requests
+        
+        response = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: requests.post(
+                f"{OLLAMA_URL}/api/generate",
+                json={
+                    "model": OLLAMA_MODEL,
+                    "prompt": prompt,
+                    "images": [img_base64],
+                    "stream": False
+                },
+                timeout=30
+            )
+        )
+        
+        if response.status_code == 200:
+            content = response.json().get("response", "")
+            return self._parse_response(content)
+        else:
+            logger.error(f"Ollama error: {response.status_code}")
+            return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
+    
+    async def _analyze_with_emergent(self, img_base64: str, prompt: str) -> Dict:
+        """Use Emergent LLM for cloud vision analysis"""
+        from emergentintegrations.llm.openai import chat_completion_with_image
+        
+        response = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: chat_completion_with_image(
+                api_key=EMERGENT_LLM_KEY,
+                image=img_base64,
+                prompt=prompt,
+                model="gpt-5.2"
+            )
+        )
+        
+        if response and response.content:
+            return self._parse_response(response.content)
+        
+        return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
+    
+    def _parse_response(self, content: str) -> Dict:
+        """Parse JSON response from vision AI"""
+        try:
+            content = content.strip()
+            if "{" in content:
+                start = content.find("{")
+                end = content.rfind("}") + 1
+                json_str = content[start:end]
+                result = json.loads(json_str)
+                
+                is_shoplifting = result.get("is_shoplifting", False)
+                description = result.get("description", "")
+                confidence = result.get("confidence", 0.5)
+                
+                if is_shoplifting:
+                    logger.warning(f"🚨 SHOPLIFTING DETECTED: {description} (conf: {confidence})")
+                else:
+                    logger.info(f"👁️ Analysis: {description[:60]} (safe)")
+                
+                return {
+                    "analyzed": True,
+                    "threat_level": "critical" if is_shoplifting else "safe",
+                    "confidence": confidence,
+                    "description": description,
+                    "behaviors_detected": result.get("evidence", []),
+                    "is_shoplifting": is_shoplifting
+                }
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse response: {e}")
+        
+        return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
 
 
 class CentralServerSync:
@@ -686,7 +798,8 @@ class CentralServerSync:
     
     async def send_heartbeat(self, cameras_online: int, cameras_total: int, 
                             stream_health: List[Dict] = None) -> bool:
-        """Send heartbeat with health data"""
+        """Send heartbeat with health data and AI model status"""
+        global ai_model_status
         try:
             response = await self.http_client.post(
                 f"{self.server_url}/api/edge/heartbeat",
@@ -697,6 +810,7 @@ class CentralServerSync:
                     "cameras_total": cameras_total,
                     "device_name": DEVICE_NAME,
                     "stream_health": stream_health or [],
+                    "ai_model_status": ai_model_status,  # Send AI status to server
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
             )
@@ -754,17 +868,19 @@ class EdgeProcessor:
     def __init__(self):
         self.sync = CentralServerSync(CENTRAL_SERVER_URL, CLIENT_ID, API_KEY)
         self.detector = MLDetector()
-        self.gpt_analyzer = GPTAnalyzer()
+        self.vision_analyzer = VisionAnalyzer()  # Renamed from gpt_analyzer
         self.cameras: Dict[str, CameraStream] = {}
         self.config = {}
         self.is_running = True
         self.detection_count = 0
         self.incident_count = 0
+        self.suspicious_tracker: Dict[str, Dict] = {}  # Track suspicious frames
         
     async def initialize(self):
         """Initialize edge processor"""
         logger.info("=" * 50)
         logger.info("SecureGuard Edge Device Starting")
+        logger.info(f"AI Provider: {AI_PROVIDER.upper()}")
         logger.info("=" * 50)
         
         # Register with central server
@@ -783,6 +899,12 @@ class EdgeProcessor:
         # Connect to cameras
         await self.setup_cameras()
         
+        # Log AI model status
+        logger.info("=" * 50)
+        logger.info("AI Model Status:")
+        for model, status in ai_model_status.items():
+            icon = "✅" if status["loaded"] else "❌"
+            logger.info(f"  {icon} {model}: {status['status']}")
         logger.info("=" * 50)
         logger.info("Edge Device Ready")
         logger.info("=" * 50)
@@ -877,20 +999,66 @@ class EdgeProcessor:
                         match
                     )
         
-        # Step 3: GPT Analysis (only way to detect new shoplifters)
+        # Step 3: Pose detection for suspicious behavior (if enabled)
+        suspicious_poses = []
+        if ENABLE_POSE:
+            poses = self.detector.detect_poses(frame)
+            for pose in poses:
+                status = pose.get("pose_status", "normal")
+                if status in ["suspicious_hands", "crouching", "concealing"]:
+                    suspicious_poses.append(status)
+            
+            if suspicious_poses:
+                # Track suspicious frames
+                camera_id = camera.camera_id
+                if camera_id not in self.suspicious_tracker:
+                    self.suspicious_tracker[camera_id] = {"count": 0, "last_time": 0}
+                
+                tracker = self.suspicious_tracker[camera_id]
+                current_time = time.time()
+                
+                # Reset if too much time passed
+                if current_time - tracker["last_time"] > 5:
+                    tracker["count"] = 1
+                else:
+                    tracker["count"] += 1
+                tracker["last_time"] = current_time
+                
+                # Only proceed if enough suspicious frames
+                if tracker["count"] < MIN_SUSPICIOUS_FRAMES:
+                    return None
+                
+                logger.info(f"⚠️ Suspicious pose detected: {suspicious_poses} (frame {tracker['count']})")
+        
+        # Step 4: Vision AI Analysis
         if not ENABLE_GPT:
+            # If GPT disabled but pose detected suspicious behavior, create incident
+            if suspicious_poses and not REQUIRE_GPT_CONFIRMATION:
+                return await self._create_incident_if_allowed(
+                    camera, frame, detections,
+                    {
+                        "analyzed": False,
+                        "threat_level": "critical",
+                        "confidence": 0.7,
+                        "description": f"Suspicious behavior: {', '.join(suspicious_poses)}",
+                        "behaviors_detected": suspicious_poses,
+                        "is_shoplifting": True
+                    },
+                    None
+                )
             return None
         
-        gpt_result = await self.gpt_analyzer.analyze_scene(frame, detections)
+        # Run vision AI (Ollama or Emergent)
+        vision_result = await self.vision_analyzer.analyze_scene(frame, detections)
         
-        # Only create incident if GPT confirms ACTUAL SHOPLIFTING
-        if gpt_result.get("is_shoplifting") == True:
-            logger.warning(f"🚨 SHOPLIFTING: {gpt_result.get('description', '')[:80]}")
-            return await self._create_incident_if_allowed(camera, frame, detections, gpt_result, None)
+        # Only create incident if AI confirms ACTUAL SHOPLIFTING
+        if vision_result.get("is_shoplifting") == True:
+            logger.warning(f"🚨 SHOPLIFTING: {vision_result.get('description', '')[:80]}")
+            return await self._create_incident_if_allowed(camera, frame, detections, vision_result, None)
         
         return None
     
-    async def _create_incident_if_allowed(self, camera, frame, detections, gpt_result, watchlist_match):
+    async def _create_incident_if_allowed(self, camera, frame, detections, vision_result, watchlist_match):
         """Create CRITICAL incident if cooldown allows"""
         current_time = time.time()
         camera_last_incident = getattr(camera, 'last_incident_time', 0)
@@ -899,10 +1067,10 @@ class EdgeProcessor:
             return None  # Cooldown active
         
         camera.last_incident_time = current_time
-        return await self.create_incident(camera, frame, detections, [], gpt_result, watchlist_match)
+        return await self.create_incident(camera, frame, detections, [], vision_result, watchlist_match)
     
     async def create_incident(self, camera: CameraStream, frame: np.ndarray, 
-                            detections: List, poses: List, gpt_result: Dict,
+                            detections: List, poses: List, vision_result: Dict,
                             watchlist_match: Optional[Dict] = None) -> Dict:
         """Create and upload CRITICAL shoplifting incident"""
         
@@ -922,12 +1090,12 @@ class EdgeProcessor:
             "incident_id": f"inc_{uuid.uuid4().hex[:12]}",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "severity": "critical",  # ALWAYS CRITICAL
-            "confidence": gpt_result.get("confidence", 0.8),
-            "description": gpt_result.get("description", "Shoplifting detected"),
+            "confidence": vision_result.get("confidence", 0.8),
+            "description": vision_result.get("description", "Shoplifting detected"),
             "camera_id": camera.camera_id,
             "camera_name": camera.name,
             "frame_thumbnail": thumbnail,
-            "behaviors": gpt_result.get("behaviors_detected", []),
+            "behaviors": vision_result.get("behaviors_detected", []),
             "persons_detected": len(detections),
             "watchlist_match": watchlist_match
         }
