@@ -1077,12 +1077,12 @@ class EdgeProcessor:
             "incident_id": f"inc_{uuid.uuid4().hex[:12]}",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "severity": "critical",  # ALWAYS CRITICAL
-            "confidence": gpt_result.get("confidence", 0.8),
-            "description": gpt_result.get("description", "Shoplifting detected"),
+            "confidence": vision_result.get("confidence", 0.8),
+            "description": vision_result.get("description", "Shoplifting detected"),
             "camera_id": camera.camera_id,
             "camera_name": camera.name,
             "frame_thumbnail": thumbnail,
-            "behaviors": gpt_result.get("behaviors_detected", []),
+            "behaviors": vision_result.get("behaviors_detected", []),
             "persons_detected": len(detections),
             "watchlist_match": watchlist_match
         }
