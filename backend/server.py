@@ -2144,6 +2144,7 @@ class HeartbeatDataV2(BaseModel):
     cameras_online: int = 0
     cameras_total: int = 0
     stream_health: Optional[List[Dict]] = None
+    ai_model_status: Optional[Dict] = None  # NEW: AI model connection status
     timestamp: Optional[str] = None
 
 
@@ -2166,6 +2167,10 @@ async def edge_heartbeat(data: HeartbeatDataV2):
     
     if data.stream_health:
         update_data["stream_health"] = data.stream_health
+    
+    # Store AI model status from edge device
+    if data.ai_model_status:
+        update_data["ai_model_status"] = data.ai_model_status
     
     await db.edge_devices.update_one(
         {"client_id": data.client_id},
