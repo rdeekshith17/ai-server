@@ -40,29 +40,45 @@ CENTRAL_SERVER_URL = os.environ.get("CENTRAL_SERVER_URL", "http://localhost:8001
 CLIENT_ID = os.environ.get("CLIENT_ID", "")
 API_KEY = os.environ.get("API_KEY", "")
 DEVICE_NAME = os.environ.get("DEVICE_NAME", "Edge-Device-001")
+
+# AI Provider Selection: "ollama" (free/local) or "emergent" (cloud API)
+AI_PROVIDER = os.environ.get("AI_PROVIDER", "ollama").lower()
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 
-# Processing settings - STABLE configuration
-DETECTION_INTERVAL = float(os.environ.get("DETECTION_INTERVAL", "1.0"))  # 1 FPS (very stable)
-CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.6"))  # Higher = fewer detections
-ENABLE_POSE = False  # DISABLED - not needed for shoplifting detection
-ENABLE_FACE = os.environ.get("ENABLE_FACE_RECOGNITION", "true").lower() == "true"
+# Ollama Configuration (FREE local AI)
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llava")  # or "bakllava", "llava-llama3"
+
+# Processing settings
+DETECTION_INTERVAL = float(os.environ.get("DETECTION_INTERVAL", "0.5"))
+CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.5"))
+ENABLE_POSE = os.environ.get("ENABLE_POSE_DETECTION", "true").lower() == "true"
+ENABLE_FACE = os.environ.get("ENABLE_FACE_RECOGNITION", "false").lower() == "true"
 ENABLE_GPT = os.environ.get("ENABLE_GPT_ANALYSIS", "true").lower() == "true"
 
-# Shoplifting detection - GPT ONLY
-INCIDENT_COOLDOWN = int(os.environ.get("INCIDENT_COOLDOWN_SECONDS", "120"))  # 2 minutes between incidents
-GPT_ANALYSIS_INTERVAL = int(os.environ.get("GPT_ANALYSIS_INTERVAL", "10"))  # Only run GPT every 10 seconds
+# Shoplifting detection
+INCIDENT_COOLDOWN = int(os.environ.get("INCIDENT_COOLDOWN_SECONDS", "60"))
+GPT_ANALYSIS_INTERVAL = float(os.environ.get("GPT_ANALYSIS_INTERVAL", "2"))
+MIN_SUSPICIOUS_FRAMES = int(os.environ.get("MIN_SUSPICIOUS_FRAMES", "3"))
+REQUIRE_GPT_CONFIRMATION = os.environ.get("REQUIRE_GPT_CONFIRMATION", "true").lower() == "true"
 
-# Streaming settings - LOW DATA USAGE
+# Streaming settings
 SYNC_INTERVAL = int(os.environ.get("SYNC_INTERVAL_SECONDS", "60"))
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", "60"))
-SNAPSHOT_INTERVAL = float(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "180"))  # Snapshot every 3 MINUTES
+SNAPSHOT_INTERVAL = float(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "180"))
 
-# RTSP Stability - NEVER RECONNECT DUE TO DECODE ERRORS
-# Decode errors are NORMAL for RTSP streams - just ignore them
+# RTSP Stability
 MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MAX_RECONNECT_ATTEMPTS", "9999"))
 RECONNECT_DELAY = int(os.environ.get("RECONNECT_DELAY_SECONDS", "60"))
-MAX_DECODE_ERRORS = 999999999  # NEVER trigger reconnect from decode errors
+MAX_DECODE_ERRORS = 999999999
+
+# Track AI model status (for admin console)
+ai_model_status = {
+    "yolo": {"enabled": True, "loaded": False, "status": "not_loaded"},
+    "pose": {"enabled": ENABLE_POSE, "loaded": False, "status": "not_loaded"},
+    "deepface": {"enabled": ENABLE_FACE, "loaded": False, "status": "not_loaded"},
+    "vision_ai": {"enabled": ENABLE_GPT, "loaded": False, "status": "not_loaded", "provider": AI_PROVIDER}
+}
 
 # Logging
 logging.basicConfig(
