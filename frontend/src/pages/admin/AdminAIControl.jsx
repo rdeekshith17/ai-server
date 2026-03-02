@@ -132,7 +132,10 @@ export default function AdminAIControl() {
       await axios.put(`${API}/admin/ai/settings`, {
         client_id: selectedClient,
         ...settings
-      }, { withCredentials: true });
+      }, { 
+        withCredentials: true,
+        headers: getAuthHeaders()
+      });
       
       toast.success("AI settings saved successfully");
     } catch (error) {
@@ -147,38 +150,56 @@ export default function AdminAIControl() {
     return client?.name || "Unknown";
   };
 
+  // Get edge device status for each model
+  const getEdgeStatus = (modelKey) => {
+    if (!edgeAiStatus?.ai_model_status) return { status: "unknown", loaded: false };
+    
+    const mapping = {
+      "enable_yolo": "yolo",
+      "enable_pose": "pose",
+      "enable_deepface": "deepface",
+      "enable_gpt_analysis": "vision_ai"
+    };
+    
+    const edgeModel = edgeAiStatus.ai_model_status[mapping[modelKey]];
+    if (!edgeModel) return { status: "unknown", loaded: false };
+    
+    return {
+      status: edgeModel.status,
+      loaded: edgeModel.loaded,
+      enabled: edgeModel.enabled,
+      provider: edgeModel.provider
+    };
+  };
+
   const models = [
     {
       key: "enable_yolo",
       name: "YOLO v8",
       description: "Real-time person detection and tracking",
       icon: Eye,
-      color: "purple",
-      status: mlStatus?.yolo?.loaded ? "active" : "inactive"
+      color: "purple"
     },
     {
       key: "enable_pose",
       name: "Pose Estimation",
       description: "Body posture and movement analysis",
       icon: Scan,
-      color: "pink",
-      status: mlStatus?.yolo_pose?.loaded ? "active" : "inactive"
+      color: "pink"
     },
     {
       key: "enable_deepface",
       name: "DeepFace",
       description: "Facial recognition for watchlist matching",
       icon: Brain,
-      color: "blue",
-      status: mlStatus?.deepface?.initialized ? "active" : "inactive"
+      color: "blue"
     },
     {
       key: "enable_gpt_analysis",
-      name: "GPT-5.2 Vision",
-      description: "Advanced behavior analysis and scene understanding",
+      name: "Vision AI",
+      description: "Shoplifting detection (Ollama or GPT)",
       icon: MessageSquare,
-      color: "cyan",
-      status: mlStatus?.gpt_vision?.available ? "active" : "inactive"
+      color: "cyan"
     }
   ];
 
