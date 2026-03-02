@@ -326,15 +326,19 @@ class MLDetector:
         self.watchlist_encodings = []
         
     def initialize(self):
-        """Initialize ML models"""
+        """Initialize ML models and update status"""
+        global ai_model_status
         logger.info("Initializing ML models...")
         
-        # YOLO for person detection
+        # YOLO for person detection (always required)
         try:
             from ultralytics import YOLO
             self.yolo_model = YOLO("yolov8n.pt")
+            ai_model_status["yolo"]["loaded"] = True
+            ai_model_status["yolo"]["status"] = "connected"
             logger.info("✅ YOLO model loaded")
         except Exception as e:
+            ai_model_status["yolo"]["status"] = f"error: {str(e)[:50]}"
             logger.error(f"Failed to load YOLO: {e}")
         
         # Pose estimation
@@ -342,9 +346,14 @@ class MLDetector:
             try:
                 from ultralytics import YOLO
                 self.pose_model = YOLO("yolov8n-pose.pt")
+                ai_model_status["pose"]["loaded"] = True
+                ai_model_status["pose"]["status"] = "connected"
                 logger.info("✅ Pose model loaded")
             except Exception as e:
+                ai_model_status["pose"]["status"] = f"error: {str(e)[:50]}"
                 logger.error(f"Failed to load pose model: {e}")
+        else:
+            ai_model_status["pose"]["status"] = "disabled"
         
         # DeepFace for face recognition
         if ENABLE_FACE:
@@ -357,9 +366,14 @@ class MLDetector:
                 except:
                     pass
                 self.deepface_initialized = True
+                ai_model_status["deepface"]["loaded"] = True
+                ai_model_status["deepface"]["status"] = "connected"
                 logger.info("✅ DeepFace initialized")
             except Exception as e:
+                ai_model_status["deepface"]["status"] = f"error: {str(e)[:50]}"
                 logger.error(f"Failed to initialize DeepFace: {e}")
+        else:
+            ai_model_status["deepface"]["status"] = "disabled"
     
     def detect_persons(self, frame: np.ndarray) -> List[Dict]:
         """Detect persons in frame using YOLO"""
