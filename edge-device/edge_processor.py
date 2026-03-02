@@ -594,6 +594,15 @@ class VisionAnalyzer:
     def _test_ollama_connection(self):
         """Test connection to Ollama server"""
         global ai_model_status
+        
+        # Vision-capable models in Ollama
+        VISION_MODELS = ["llava", "bakllava", "llava-llama3", "moondream", "cogvlm"]
+        
+        # Warn if using a non-vision model
+        is_vision_model = any(vm in OLLAMA_MODEL.lower() for vm in VISION_MODELS)
+        if not is_vision_model:
+            logger.warning(f"⚠️ Model '{OLLAMA_MODEL}' may not support images. For vision analysis, use: llava, bakllava, or llava-llama3")
+        
         try:
             import requests
             response = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
@@ -604,7 +613,11 @@ class VisionAnalyzer:
                     ai_model_status["vision_ai"]["loaded"] = True
                     ai_model_status["vision_ai"]["status"] = "connected"
                     ai_model_status["vision_ai"]["provider"] = f"ollama ({OLLAMA_MODEL})"
-                    logger.info(f"✅ Ollama connected - model: {OLLAMA_MODEL}")
+                    if is_vision_model:
+                        logger.info(f"✅ Ollama connected - vision model: {OLLAMA_MODEL}")
+                    else:
+                        logger.warning(f"⚠️ Ollama connected - model: {OLLAMA_MODEL} (NOT a vision model)")
+                        ai_model_status["vision_ai"]["status"] = "connected (text-only)"
                 else:
                     ai_model_status["vision_ai"]["status"] = f"model {OLLAMA_MODEL} not found"
                     logger.warning(f"Ollama connected but model '{OLLAMA_MODEL}' not found. Available: {model_names}")
