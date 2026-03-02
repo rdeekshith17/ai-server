@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 class ShopliftingDetectionTester:
-    def __init__(self, base_url="https://edgeai-1.preview.emergentagent.com/api"):
+    def __init__(self, base_url="https://store-shield.preview.emergentagent.com/api"):
         self.base_url = base_url
         self.tests_run = 0
         self.tests_passed = 0
