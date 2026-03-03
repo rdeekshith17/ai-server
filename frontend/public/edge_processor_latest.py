@@ -596,7 +596,7 @@ class VisionAnalyzer:
         global ai_model_status
         
         # Vision-capable models in Ollama
-        VISION_MODELS = ["llava", "bakllava", "llava-llama3", "moondream", "cogvlm"]
+        VISION_MODELS = ["llava", "bakllava", "llava-llama3", "moondream", "cogvlm", "llama3.2-vision", "minicpm-v"]
         
         # Warn if using a non-vision model
         is_vision_model = any(vm in OLLAMA_MODEL.lower() for vm in VISION_MODELS)
