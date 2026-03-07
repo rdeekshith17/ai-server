@@ -47,7 +47,7 @@ EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 
 # Ollama Configuration (FREE local AI)
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llava")  # or "bakllava", "llava-llama3"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "moondream")  # lightweight vision model for edge devices
 
 # Processing settings
 DETECTION_INTERVAL = float(os.environ.get("DETECTION_INTERVAL", "0.5"))
