@@ -31,7 +31,11 @@ Patch changelog (all 16 bugs fixed):
   13. Unused Tuple import removed
   14. threading.Lock now actually used in read_frame() for thread safety
   15. Frame read exceptions logged at DEBUG level instead of silently swallowed
-  16. arm_extended uses distinct left_/right_ labels to avoid duplicate list entries
+  17. Ollama timeout increased 30s → 60s for Orin Nano edge hardware
+  18. JPEG quality reduced 60 → 30 for faster Ollama processing on edge hardware
+  19. Prompt tightened to force JSON-only response (no extra text)
+  20. _parse_response() uses brace-matching extractor — handles extra text before/after JSON
+  21. Incident thumbnail resized to max 640x480 + quality 40 to fix 413 payload too large
 """
 
 import os
@@ -673,29 +677,17 @@ class VisionAnalyzer:
         # Update timestamp before the call — prevents tight retry loop if the call throws
         self.last_analysis_time = now
 
-        # Encode frame
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        # Lower JPEG quality = smaller image = faster analysis on edge hardware
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 30])
         img_base64 = base64.b64encode(buffer).decode('utf-8')
         
-        prompt = f"""Analyze this security camera image for shoplifting.
+        prompt = f"""You are a security camera AI. Analyze this image for shoplifting.
+People visible: {len(detections)}
 
-People in frame: {len(detections)}
+Respond with ONLY a single JSON object. No explanation, no extra text, nothing before or after the JSON.
 
-ONLY return is_shoplifting=true if you see ACTUAL THEFT:
-- Person hiding merchandise in clothing/bag
-- Person concealing items under jacket
-- Person removing security tags
-
-Return is_shoplifting=false for:
-- Normal shopping
-- Staff restocking
-- Customer examining products
-
-JSON only:
-{{"is_shoplifting": false, "confidence": 0.0, "description": "what you see"}}
-
-or if theft:
-{{"is_shoplifting": true, "confidence": 0.9, "description": "theft action"}}"""
+If shoplifting: {{"is_shoplifting": true, "confidence": 0.9, "description": "brief description"}}
+If safe: {{"is_shoplifting": false, "confidence": 0.1, "description": "brief description"}}"""
 
         try:
             if self.provider == "ollama":
@@ -724,7 +716,7 @@ or if theft:
                     "images": [img_base64],
                     "stream": False
                 },
-                timeout=30
+                timeout=60
             )
         )
         
@@ -756,35 +748,53 @@ or if theft:
         return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
     
     def _parse_response(self, content: str) -> Dict:
-        """Parse JSON response from vision AI"""
+        """Parse JSON response from vision AI — robust brace-matching extractor"""
         try:
             content = content.strip()
-            if "{" in content:
-                start = content.find("{")
-                end = content.rfind("}") + 1
-                json_str = content[start:end]
-                result = json.loads(json_str)
-                
-                is_shoplifting = result.get("is_shoplifting", False)
-                description = result.get("description", "")
-                confidence = result.get("confidence", 0.5)
-                
-                if is_shoplifting:
-                    logger.warning(f"🚨 SHOPLIFTING DETECTED: {description} (conf: {confidence})")
-                else:
-                    logger.info(f"👁️ Analysis: {description[:60]} (safe)")
-                
-                return {
-                    "analyzed": True,
-                    "threat_level": "critical" if is_shoplifting else "safe",
-                    "confidence": confidence,
-                    "description": description,
-                    "behaviors_detected": result.get("evidence", []),
-                    "is_shoplifting": is_shoplifting
-                }
+
+            if "{" not in content:
+                logger.warning(f"No JSON found in response: {content[:100]}")
+                return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
+
+            # Extract the FIRST complete JSON object using brace matching.
+            # This handles models that add extra text before/after the JSON,
+            # or return multiple JSON blocks — we only want the first one.
+            start = content.find("{")
+            depth = 0
+            end = start
+            for i, ch in enumerate(content[start:], start):
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+
+            json_str = content[start:end]
+            result = json.loads(json_str)
+
+            is_shoplifting = bool(result.get("is_shoplifting", False))
+            description = result.get("description", "")
+            confidence = float(result.get("confidence", 0.5))
+
+            if is_shoplifting:
+                logger.warning(f"🚨 SHOPLIFTING DETECTED: {description} (conf: {confidence})")
+            else:
+                logger.info(f"👁️ Analysis: {description[:60]} (safe)")
+
+            return {
+                "analyzed": True,
+                "threat_level": "critical" if is_shoplifting else "safe",
+                "confidence": confidence,
+                "description": description,
+                "behaviors_detected": result.get("evidence", []),
+                "is_shoplifting": is_shoplifting
+            }
+
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse response: {e}")
-        
+            logger.error(f"Failed to parse response: {e}\nRaw: {content[:200]}")
+
         return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
 
 
@@ -1132,10 +1142,19 @@ class EdgeProcessor:
             x1, y1, x2, y2 = det["bbox"]
             # Red box for all - this is a shoplifting incident
             cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
-            cv2.putText(annotated_frame, "SHOPLIFTER", (x1, y1-10), 
+            cv2.putText(annotated_frame, "SHOPLIFTER", (x1, y1-10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        
-        _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+
+        # Resize to max 640x480 and compress heavily to avoid 413 payload too large
+        thumb_h, thumb_w = annotated_frame.shape[:2]
+        scale = min(640 / thumb_w, 480 / thumb_h, 1.0)
+        if scale < 1.0:
+            annotated_frame = cv2.resize(
+                annotated_frame,
+                (int(thumb_w * scale), int(thumb_h * scale)),
+                interpolation=cv2.INTER_AREA
+            )
+        _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 40])
         thumbnail = base64.b64encode(buffer).decode('utf-8')
         
         incident = {
