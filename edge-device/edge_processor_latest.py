@@ -36,6 +36,29 @@ Patch changelog (all 16 bugs fixed):
   19. Prompt tightened to force JSON-only response (no extra text)
   20. _parse_response() uses brace-matching extractor — handles extra text before/after JSON
   21. Incident thumbnail resized to max 640x480 + quality 40 to fix 413 payload too large
+
+  V4 FIXES
+  22. Thumbnail quality raised 40 → 75 — quality 40 caused visible artifacts for evidence images
+  23. Vision AI frame quality kept at 40 — AI inference doesn't need photographic clarity
+  24. Snapshot quality raised 60 → 70 for better live view clarity
+  25. Frame corruption detection added (_is_frame_corrupted) with 5 checks:
+        - Dimension check (frame too small)
+        - Channel check (must be 3-channel BGR)
+        - Blank frame check (all black or all white)
+        - Variance check (near-zero variance = no real image data)
+        - Frozen frame check (pixel-identical to last frame for > 5s)
+  26. Corruption check also applied to snapshots before encoding
+
+  V5 FIXES (false positive reduction)
+  27. hands_near_waist now requires BOTH hands near waist (was either hand — far too sensitive)
+  28. looking_around threshold raised 0.5 → 0.8 shoulder widths (normal glances no longer trigger)
+  29. MIN_SUSPICIOUS_FRAMES default raised 3 → 5 (more evidence required before escalating)
+  30. Suspicious tracker now accumulates distinct signal types — requires MIN_COMBINED_SIGNALS (default 2)
+       distinct pose types before passing to vision AI, preventing single repeated behavior from triggering
+  31. Counter now decays by 1 on normal frames, preventing stale counts from lingering
+  32. Vision AI prompt completely rewritten — explicit DO NOT flag list, conservative bias
+  33. VISION_CONFIDENCE_THRESHOLD added (default 0.75) — low-confidence AI responses ignored
+  34. Confidence shown in shoplifting log output for easier tuning
 """
 
 import os
@@ -84,9 +107,11 @@ ENABLE_GPT = os.environ.get("ENABLE_GPT_ANALYSIS", "true").lower() == "true"
 # Shoplifting detection
 INCIDENT_COOLDOWN = int(os.environ.get("INCIDENT_COOLDOWN_SECONDS", "60"))
 GPT_ANALYSIS_INTERVAL = float(os.environ.get("GPT_ANALYSIS_INTERVAL", "2"))
-MIN_SUSPICIOUS_FRAMES = int(os.environ.get("MIN_SUSPICIOUS_FRAMES", "3"))
+MIN_SUSPICIOUS_FRAMES = int(os.environ.get("MIN_SUSPICIOUS_FRAMES", "5"))
 SUSPICIOUS_RESET_WINDOW = int(os.environ.get("SUSPICIOUS_RESET_WINDOW", "30"))  # seconds before suspicious frame counter resets
 REQUIRE_GPT_CONFIRMATION = os.environ.get("REQUIRE_GPT_CONFIRMATION", "true").lower() == "true"
+VISION_CONFIDENCE_THRESHOLD = float(os.environ.get("VISION_CONFIDENCE_THRESHOLD", "0.75"))  # min AI confidence to trigger incident
+MIN_COMBINED_SIGNALS = int(os.environ.get("MIN_COMBINED_SIGNALS", "2"))  # min distinct pose signals before passing to vision AI
 
 # Streaming settings — support both correct spelling and legacy typo ("INTERNAL" vs "INTERVAL")
 SYNC_INTERVAL = int(os.environ.get("SYNC_INTERVAL_SECONDS",
@@ -281,39 +306,85 @@ class CameraStream:
         return self.connect()
     
     def read_frame(self) -> Optional[np.ndarray]:
-        """Read single frame - NEVER reconnect due to decode errors"""
+        """Read single frame with full corruption detection"""
         # If not running, try to reconnect (non-blocking)
         if not self.is_running:
             self.try_reconnect()
             return self.last_frame
-        
+
         if not self.cap or not self.cap.isOpened():
             self.schedule_reconnect()
             return self.last_frame
-        
+
         try:
             with self.lock:
                 ret, frame = self.cap.read()
-            
+
             if ret and frame is not None:
-                # Validate frame
-                if frame.size == 0 or frame.shape[0] == 0 or frame.shape[1] == 0:
-                    return self.last_frame  # Just use last frame
-                
+                if self._is_frame_corrupted(frame):
+                    self.health.record_error()
+                    logger.debug(f"Corrupted frame discarded on {self.name}")
+                    return self.last_frame
+
                 self.last_frame = frame
                 self.last_frame_time = time.time()
                 self.health.record_frame()
                 self.health.frames_processed += 1
                 return frame
             else:
-                # Frame read failed - just use last frame, DON'T reconnect
-                # Decode errors are NORMAL for RTSP streams
+                # Frame read failed — normal for RTSP, use last good frame
                 return self.last_frame
-                
+
         except Exception as e:
             self.health.record_error()
             logger.debug(f"Frame read error on {self.name}: {e}")
             return self.last_frame
+
+    def _is_frame_corrupted(self, frame: np.ndarray) -> bool:
+        """
+        Detect corrupted frames using multiple checks:
+        1. Dimension check      — zero-size or impossibly small frame
+        2. Channel check        — must be 3-channel BGR
+        3. Blank frame check    — completely black or white (sensor/decode failure)
+        4. Frozen frame check   — identical to previous frame for too long
+        5. Variance check       — near-zero variance means no real image data
+        """
+        try:
+            # 1. Dimension check
+            if frame is None or frame.size == 0:
+                return True
+            h, w = frame.shape[:2]
+            if h < 32 or w < 32:
+                return True
+
+            # 2. Channel check
+            if len(frame.shape) < 3 or frame.shape[2] != 3:
+                return True
+
+            # 3. Blank frame — mean brightness near 0 (black) or 255 (white)
+            mean_brightness = float(np.mean(frame))
+            if mean_brightness < 2.0 or mean_brightness > 253.0:
+                return True
+
+            # 4. Variance check — real frames have pixel variance > threshold
+            # A corrupted/frozen/solid frame has near-zero variance
+            variance = float(np.var(frame))
+            if variance < 10.0:
+                return True
+
+            # 5. Frozen frame — if pixel-identical to last frame for > 5s
+            if self.last_frame is not None:
+                if frame.shape == self.last_frame.shape:
+                    if np.array_equal(frame, self.last_frame):
+                        frozen_duration = time.time() - (self.last_frame_time or 0)
+                        if frozen_duration > 5.0:
+                            return True
+
+            return False
+
+        except Exception as e:
+            logger.debug(f"Frame corruption check error: {e}")
+            return False  # Don't discard if check itself fails
     
     def get_snapshot(self) -> Optional[str]:
         """Get current frame as base64 JPEG"""
@@ -322,13 +393,19 @@ class CameraStream:
             return None
         
         try:
+            # Reject corrupted frames before encoding
+            if self._is_frame_corrupted(frame):
+                return None
+
             # Resize for snapshot (reduce bandwidth)
             h, w = frame.shape[:2]
             scale = min(640 / w, 480 / h, 1.0)
             if scale < 1.0:
-                frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
-            
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                frame = cv2.resize(frame, (int(w * scale), int(h * scale)),
+                                   interpolation=cv2.INTER_AREA)
+
+            # Quality 70 — good enough for live view monitoring
+            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
             return base64.b64encode(buffer).decode('utf-8')
         except Exception as e:
             logger.error(f"Snapshot error: {e}")
@@ -484,13 +561,15 @@ class MLDetector:
             shoulder_y = (left_shoulder[1] + right_shoulder[1]) / 2 if left_shoulder[1] > 0 and right_shoulder[1] > 0 else 0
             torso_height = waist_y - shoulder_y if waist_y > 0 and shoulder_y > 0 else 100
             
-            # 1. Check for concealment behavior (hands near waist/pockets) - VERY COMMON
+            # 1. Concealment behavior — BOTH hands near waist required
+            # Single hand near waist is completely normal (holding phone, adjusting clothes)
+            # Both hands near waist simultaneously is much more suspicious
             if waist_y > 0:
-                threshold = max(80, torso_height * 0.4)  # Larger threshold
+                threshold = max(60, torso_height * 0.3)  # tighter threshold than before
                 left_near_waist = abs(left_wrist[1] - waist_y) < threshold if left_wrist[1] > 0 else False
                 right_near_waist = abs(right_wrist[1] - waist_y) < threshold if right_wrist[1] > 0 else False
-                
-                if left_near_waist or right_near_waist:
+
+                if left_near_waist and right_near_waist:  # BOTH hands required
                     suspicious_behaviors.append("hands_near_waist")
             
             # 2. Check for bent/crouching posture (torso compression)
@@ -500,13 +579,14 @@ class MLDetector:
                 if (waist_y - nose[1]) < torso_height * 0.5:
                     suspicious_behaviors.append("crouching")
             
-            # 3. Check for looking around behavior (head turned away from body)
+            # 3. Looking around — head must be significantly turned, not just a small glance
+            # Normal shoppers look left/right constantly — require > 80% shoulder width offset
             if nose[0] > 0 and shoulder_y > 0:
                 body_center_x = (left_shoulder[0] + right_shoulder[0]) / 2 if left_shoulder[0] > 0 and right_shoulder[0] > 0 else nose[0]
                 head_offset = abs(nose[0] - body_center_x)
                 shoulder_width = abs(left_shoulder[0] - right_shoulder[0]) if left_shoulder[0] > 0 and right_shoulder[0] > 0 else 100
-                
-                if head_offset > shoulder_width * 0.5:
+
+                if head_offset > shoulder_width * 0.8:  # was 0.5 — too sensitive
                     suspicious_behaviors.append("looking_around")
             
             # 4. Check for arms extended (grabbing items)
@@ -677,17 +757,34 @@ class VisionAnalyzer:
         # Update timestamp before the call — prevents tight retry loop if the call throws
         self.last_analysis_time = now
 
-        # Lower JPEG quality = smaller image = faster analysis on edge hardware
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 30])
+        # Quality 40 for vision AI — lower is fine here since the AI doesn't need
+        # photographic clarity, just enough detail to identify behaviors.
+        # Thumbnails stored in incidents use quality 75 for human review.
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 40])
         img_base64 = base64.b64encode(buffer).decode('utf-8')
         
-        prompt = f"""You are a security camera AI. Analyze this image for shoplifting.
+        prompt = f"""You are a retail security camera AI. Your job is to detect ACTUAL shoplifting only.
 People visible: {len(detections)}
 
-Respond with ONLY a single JSON object. No explanation, no extra text, nothing before or after the JSON.
+ONLY flag as shoplifting if you can clearly see ONE of these happening RIGHT NOW:
+- A person physically concealing merchandise inside clothing, a bag, or under a jacket
+- A person removing or tampering with a security tag on a product
+- A person transferring items from store packaging into their own bag
 
-If shoplifting: {{"is_shoplifting": true, "confidence": 0.9, "description": "brief description"}}
-If safe: {{"is_shoplifting": false, "confidence": 0.1, "description": "brief description"}}"""
+DO NOT flag as shoplifting:
+- People browsing, examining, or holding products normally
+- People with hands in pockets or near their waist
+- People looking around the store
+- People crouching to look at lower shelves
+- Staff restocking or organizing shelves
+- Any ambiguous or uncertain behavior
+
+Be conservative. If you are not certain, return is_shoplifting false.
+
+Respond with ONLY a single JSON object, no other text:
+{{"is_shoplifting": false, "confidence": 0.0, "description": "what you see in one sentence"}}
+or if you are highly certain of actual theft:
+{{"is_shoplifting": true, "confidence": 0.85, "description": "specific theft action observed"}}"""
 
         try:
             if self.provider == "ollama":
@@ -1050,31 +1147,52 @@ class EdgeProcessor:
             poses = self.detector.detect_poses(frame)
             for pose in poses:
                 status = pose.get("pose_status", "normal")
-                # Use the full set of labels that _analyze_pose() actually returns
                 if status in {"suspicious_hands", "crouching", "looking_around", "reaching"}:
                     suspicious_poses.append(status)
-            
+
             if suspicious_poses:
                 # Track suspicious frames per camera
                 camera_id = camera.camera_id
                 if camera_id not in self.suspicious_tracker:
-                    self.suspicious_tracker[camera_id] = {"count": 0, "last_time": 0}
-                
+                    self.suspicious_tracker[camera_id] = {
+                        "count": 0,
+                        "last_time": 0,
+                        "signals": set()  # track distinct signal types seen
+                    }
+
                 tracker = self.suspicious_tracker[camera_id]
                 current_time = time.time()
-                
-                # Reset counter if too much time has passed (use SUSPICIOUS_RESET_WINDOW, not 5s)
+
+                # Reset counter if too much time has passed
                 if current_time - tracker["last_time"] > SUSPICIOUS_RESET_WINDOW:
                     tracker["count"] = 1
+                    tracker["signals"] = set(suspicious_poses)
                 else:
                     tracker["count"] += 1
+                    tracker["signals"].update(suspicious_poses)  # accumulate distinct signals
                 tracker["last_time"] = current_time
-                
-                logger.info(f"⚠️ Suspicious pose detected: {suspicious_poses} (frame {tracker['count']}/{MIN_SUSPICIOUS_FRAMES})")
-                
-                # Only proceed if enough suspicious frames accumulated
+
+                distinct_signals = len(tracker["signals"])
+                logger.info(
+                    f"⚠️ Suspicious pose: {suspicious_poses} "
+                    f"(frame {tracker['count']}/{MIN_SUSPICIOUS_FRAMES}, "
+                    f"signals {distinct_signals}/{MIN_COMBINED_SIGNALS})"
+                )
+
+                # Require BOTH enough frames AND enough distinct signal types
+                # This prevents a single repeated normal behavior from triggering
                 if tracker["count"] < MIN_SUSPICIOUS_FRAMES:
                     return None
+                if distinct_signals < MIN_COMBINED_SIGNALS:
+                    logger.info(f"⏳ Waiting for more distinct signals ({distinct_signals}/{MIN_COMBINED_SIGNALS})")
+                    return None
+            else:
+                # No suspicious pose this frame — decay the counter slightly
+                # so a brief normal pause doesn't keep the counter artificially high
+                camera_id = camera.camera_id
+                if camera_id in self.suspicious_tracker:
+                    tracker = self.suspicious_tracker[camera_id]
+                    tracker["count"] = max(0, tracker["count"] - 1)
         
         # Step 4: Pose-only path (GPT disabled OR GPT confirmation not required)
         if not ENABLE_GPT:
@@ -1114,10 +1232,17 @@ class EdgeProcessor:
         # Skip rate-limited frames — don't treat as safe
         if vision_result.get("skipped"):
             return None
-        
-        # Only create incident if AI explicitly confirms shoplifting
+
+        # Only create incident if AI explicitly confirms shoplifting AND confidence is high enough
         if vision_result.get("is_shoplifting") == True:
-            logger.warning(f"🚨 SHOPLIFTING: {vision_result.get('description', '')[:80]}")
+            confidence = vision_result.get("confidence", 0.0)
+            if confidence < VISION_CONFIDENCE_THRESHOLD:
+                logger.info(
+                    f"👁️ Shoplifting suggested but confidence too low: "
+                    f"{confidence:.2f} < {VISION_CONFIDENCE_THRESHOLD} — skipping"
+                )
+                return None
+            logger.warning(f"🚨 SHOPLIFTING: {vision_result.get('description', '')[:80]} (conf: {confidence:.2f})")
             return await self._create_incident_if_allowed(camera, frame, detections, vision_result, None)
     
     async def _create_incident_if_allowed(self, camera, frame, detections, vision_result, watchlist_match):
@@ -1145,7 +1270,8 @@ class EdgeProcessor:
             cv2.putText(annotated_frame, "SHOPLIFTER", (x1, y1-10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-        # Resize to max 640x480 and compress heavily to avoid 413 payload too large
+        # Resize to max 640x480 to keep payload size manageable (fixes 413 errors)
+        # Quality 75 — good balance between file size and visual clarity for evidence
         thumb_h, thumb_w = annotated_frame.shape[:2]
         scale = min(640 / thumb_w, 480 / thumb_h, 1.0)
         if scale < 1.0:
@@ -1154,7 +1280,7 @@ class EdgeProcessor:
                 (int(thumb_w * scale), int(thumb_h * scale)),
                 interpolation=cv2.INTER_AREA
             )
-        _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 40])
+        _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
         thumbnail = base64.b64encode(buffer).decode('utf-8')
         
         incident = {
