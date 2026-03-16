@@ -795,28 +795,42 @@ class VisionAnalyzer:
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 40])
         img_base64 = base64.b64encode(buffer).decode('utf-8')
         
-        prompt = f"""You are a retail security camera AI. Your job is to detect ACTUAL shoplifting only.
-People visible: {len(detections)}
+        prompt = f"""You are a security camera AI monitoring a liquor store.
 
-ONLY flag as shoplifting if you can clearly see ONE of these happening RIGHT NOW:
-- A person physically concealing merchandise inside clothing, a bag, or under a jacket
-- A person removing or tampering with a security tag on a product
-- A person transferring items from store packaging into their own bag
+STORE LAYOUT:
+- This is a liquor store with a single entry/exit door (same door for both)
+- Products sold: liquor bottles, wines, champagnes, beers, chips, cookies, chocolates, juices, energy drinks, sodas (Coke, Pepsi, Sprite etc.)
+- There is a register/counter with a monitor at the front of the store
+- EMPLOYEES: Anyone standing BEHIND the register counter or monitor area — these are staff, never flag them
+- CUSTOMERS: Everyone else in the store away from the register area
 
-DO NOT flag as shoplifting:
-- People browsing, examining, or holding products normally
-- People with hands in pockets or near their waist
-- People looking around the store
-- People crouching to look at lower shelves
-- Staff restocking or organizing shelves
-- Any ambiguous or uncertain behavior
+PEOPLE IN FRAME: {len(detections)}
 
-Be conservative. If you are not certain, return is_shoplifting false.
+YOUR TASK — ONLY flag is_shoplifting=true if you can clearly see a CUSTOMER doing ONE of these RIGHT NOW:
+- Physically hiding a bottle, can, or product inside clothing, a bag, or under a jacket
+- Concealing merchandise in their waistband, pockets, or under their shirt
+- Removing or tampering with a security tag or bottle cap lock
+- Transferring products from store shelving directly into their own bag without going to register
+- Walking toward or through the exit door with unpaid items visibly concealed
 
-Respond with ONLY a single JSON object, no other text:
-{{"is_shoplifting": false, "confidence": 0.0, "description": "what you see in one sentence"}}
-or if you are highly certain of actual theft:
-{{"is_shoplifting": true, "confidence": 0.85, "description": "specific theft action observed"}}"""
+NEVER flag as shoplifting:
+- Employees behind the register or counter area — they work there
+- Customers picking up, examining, reading labels, or holding products normally
+- Customers carrying a basket or store bag while shopping
+- Customers walking around the store browsing any aisle
+- Customers crouching to look at bottom shelf products
+- Customers looking toward the door, exit, or around the store
+- Customers placing items back on shelves
+- Any behavior that could have an innocent explanation
+- Anything you are not 100% certain about
+
+Be highly conservative. A false alarm is worse than a missed detection.
+If there is ANY doubt, return is_shoplifting=false.
+
+Respond with ONLY a single JSON object — no other text, no explanation:
+{{"is_shoplifting": false, "confidence": 0.0, "description": "one sentence describing what you see"}}
+or only if you are absolutely certain of active theft by a customer:
+{{"is_shoplifting": true, "confidence": 0.9, "description": "exact theft action and product observed"}}"""
 
         try:
             if self.provider == "ollama":
