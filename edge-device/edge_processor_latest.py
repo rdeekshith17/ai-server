@@ -59,6 +59,23 @@ Patch changelog (all 16 bugs fixed):
   32. Vision AI prompt completely rewritten — explicit DO NOT flag list, conservative bias
   33. VISION_CONFIDENCE_THRESHOLD added (default 0.75) — low-confidence AI responses ignored
   34. Confidence shown in shoplifting log output for easier tuning
+
+  V6 FIXES (hallucination and business hours)
+  35. Business hours enforcement added — detection fully suppressed outside store hours
+      Configurable via STORE_OPEN_HOUR, STORE_CLOSE_HOUR, ENFORCE_BUSINESS_HOURS
+  36. MIN_PERSONS_FOR_ANALYSIS added — vision AI is NEVER called unless YOLO
+      confirms at least 1 real person is present. Stops LLM hallucinating people.
+  37. Same YOLO guard added inside analyze_scene() as a second hard check
+  38. Status log now shows whether detection is active or suppressed (store open/closed)
+  39. Counter reset after threshold hit to prevent runaway 9000+ frame counts
+
+  V6 FINAL FIXES
+  40. Frame reads still happen when store is closed (keeps RTSP buffer fresh) but
+      processing is skipped — store_open check moved to run loop, not process_frame
+  41. Redundant is_store_open() check removed from process_frame (run loop handles it)
+  42. sync_pending_incidents now re-compresses oversized thumbnails before retrying —
+      fixes incidents saved before thumbnail resize fix that retry forever with 413
+  43. Default OLLAMA_MODEL updated from moondream → llava-phi3 in code default
 """
 
 import os
@@ -95,7 +112,7 @@ EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 
 # Ollama Configuration (FREE local AI)
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "moondream")  # lightweight vision model for edge devices
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llava-phi3")  # default vision model for edge devices
 
 # Processing settings
 DETECTION_INTERVAL = float(os.environ.get("DETECTION_INTERVAL", "0.5"))
@@ -112,6 +129,16 @@ SUSPICIOUS_RESET_WINDOW = int(os.environ.get("SUSPICIOUS_RESET_WINDOW", "30"))  
 REQUIRE_GPT_CONFIRMATION = os.environ.get("REQUIRE_GPT_CONFIRMATION", "true").lower() == "true"
 VISION_CONFIDENCE_THRESHOLD = float(os.environ.get("VISION_CONFIDENCE_THRESHOLD", "0.75"))  # min AI confidence to trigger incident
 MIN_COMBINED_SIGNALS = int(os.environ.get("MIN_COMBINED_SIGNALS", "2"))  # min distinct pose signals before passing to vision AI
+
+# Business hours — detection is suppressed outside store open hours
+# Format: 24-hour integers. e.g. 8 = 8:00 AM, 19 = 7:00 PM
+STORE_OPEN_HOUR  = int(os.environ.get("STORE_OPEN_HOUR",  "8"))
+STORE_CLOSE_HOUR = int(os.environ.get("STORE_CLOSE_HOUR", "19"))
+ENFORCE_BUSINESS_HOURS = os.environ.get("ENFORCE_BUSINESS_HOURS", "true").lower() == "true"
+
+# Minimum YOLO-confirmed persons required before vision AI is called
+# Prevents hallucination — if YOLO sees 0 people, vision AI is never invoked
+MIN_PERSONS_FOR_ANALYSIS = int(os.environ.get("MIN_PERSONS_FOR_ANALYSIS", "1"))
 
 # Streaming settings — support both correct spelling and legacy typo ("INTERNAL" vs "INTERVAL")
 SYNC_INTERVAL = int(os.environ.get("SYNC_INTERVAL_SECONDS",
@@ -745,9 +772,14 @@ class VisionAnalyzer:
         """Analyze scene for shoplifting using Ollama or Emergent"""
         if not self.enabled:
             return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
-        
+
+        # Hard guard — if YOLO detected no people, never call the vision model.
+        # Vision LLMs hallucinate people in empty frames — YOLO is the ground truth.
+        if len(detections) < MIN_PERSONS_FOR_ANALYSIS:
+            return {"analyzed": False, "skipped": True, "is_shoplifting": None,
+                    "reason": "no_persons_detected"}
+
         # Rate limit — return a neutral skip sentinel, NOT is_shoplifting=False
-        # (returning false would treat this frame as confirmed safe)
         now = time.time()
         if now - self.last_analysis_time < self.min_analysis_interval:
             return {"analyzed": False, "skipped": True, "is_shoplifting": None, "reason": "rate_limited"}
@@ -1004,6 +1036,17 @@ class CentralServerSync:
         await self.http_client.aclose()
 
 
+def is_store_open() -> bool:
+    """
+    Returns True if the current local time is within store hours.
+    If ENFORCE_BUSINESS_HOURS is false, always returns True.
+    """
+    if not ENFORCE_BUSINESS_HOURS:
+        return True
+    current_hour = datetime.now().hour  # local time, no timezone
+    return STORE_OPEN_HOUR <= current_hour < STORE_CLOSE_HOUR
+
+
 class EdgeProcessor:
     """Main edge device processor - SHOPLIFTING ONLY"""
     
@@ -1114,13 +1157,14 @@ class EdgeProcessor:
     
     async def process_frame(self, camera: CameraStream, frame: np.ndarray):
         """Process frame - ONLY GPT-confirmed shoplifting (CRITICAL only)"""
-        
-        # Step 1: Detect persons (just to know if anyone is in frame)
+
+        # Detect persons with YOLO first — vision AI is NEVER called unless YOLO
+        # confirms real people are present. Prevents LLM hallucinating people in empty frames.
         detections = self.detector.detect_persons(frame)
         self.detection_count += 1
-        
-        if not detections:
-            return None  # No one in frame
+
+        if len(detections) < MIN_PERSONS_FOR_ANALYSIS:
+            return None  # YOLO sees nobody — skip
         
         # Step 2: Check watchlist (CRITICAL - known shoplifters)
         if ENABLE_FACE:
@@ -1186,6 +1230,11 @@ class EdgeProcessor:
                 if distinct_signals < MIN_COMBINED_SIGNALS:
                     logger.info(f"⏳ Waiting for more distinct signals ({distinct_signals}/{MIN_COMBINED_SIGNALS})")
                     return None
+
+                # Reset window after passing threshold — prevents re-triggering on the same
+                # sustained behavior without new evidence, and stops counter growing to 9000+
+                tracker["count"] = 0
+                tracker["signals"] = set()
             else:
                 # No suspicious pose this frame — decay the counter slightly
                 # so a brief normal pause doesn't keep the counter artificially high
@@ -1339,6 +1388,30 @@ class EdgeProcessor:
             return
         logger.info(f"Retrying {len(pending)} pending incident(s)...")
         for incident in pending:
+            # Re-compress thumbnail if oversized — handles incidents saved before the
+            # thumbnail resize fix was applied, which would otherwise retry forever (413)
+            thumbnail = incident.get("frame_thumbnail", "")
+            if thumbnail:
+                approx_kb = len(thumbnail) * 3 / 4 / 1024
+                if approx_kb > 200:
+                    try:
+                        img_bytes = base64.b64decode(thumbnail)
+                        img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
+                        img = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
+                        if img is not None:
+                            h, w = img.shape[:2]
+                            scale = min(640 / w, 480 / h, 1.0)
+                            if scale < 1.0:
+                                img = cv2.resize(img, (int(w * scale), int(h * scale)),
+                                                 interpolation=cv2.INTER_AREA)
+                            _, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                            incident = dict(incident)
+                            incident["frame_thumbnail"] = base64.b64encode(buf).decode('utf-8')
+                            new_kb = len(incident["frame_thumbnail"]) * 3 / 4 / 1024
+                            logger.info(f"Re-compressed thumbnail: {approx_kb:.0f}KB → {new_kb:.0f}KB")
+                    except Exception as e:
+                        logger.warning(f"Could not re-compress thumbnail: {e}")
+
             # Remove TinyDB internal fields before uploading
             clean = {k: v for k, v in incident.items() if not k.startswith("_") and k != "uploaded"}
             success = await self.sync.upload_incident(clean)
@@ -1364,15 +1437,18 @@ class EdgeProcessor:
                     last_config_refresh = current_time
                 
                 # Process each camera
+                store_open = is_store_open()
                 for camera_id, camera in self.cameras.items():
                     if not camera.is_running:
                         # Try to reconnect
                         camera.connect()
                         continue
-                    
+
+                    # Always read frames to keep RTSP buffer fresh and avoid stale frames
+                    # But only process for detection during business hours
                     frame = camera.read_frame()
-                    
-                    if frame is not None:
+
+                    if frame is not None and store_open:
                         try:
                             incident = await self.process_frame(camera, frame)
                         except Exception as e:
@@ -1396,8 +1472,9 @@ class EdgeProcessor:
                     await self.sync.send_heartbeat(online, len(self.cameras), health_data)
                     last_heartbeat = current_time
                     
-                    # Log status
-                    logger.info(f"📊 Status: {online}/{len(self.cameras)} cameras | {self.detection_count} detections | {self.incident_count} incidents")
+                    # Log status including whether detection is active
+                    status_str = "🟢 ACTIVE" if store_open else f"🔴 CLOSED (opens {STORE_OPEN_HOUR}:00)"
+                    logger.info(f"📊 Status: {online}/{len(self.cameras)} cameras | {self.detection_count} detections | {self.incident_count} incidents | Detection: {status_str}")
                 
                 # Sleep between detection cycles
                 await asyncio.sleep(DETECTION_INTERVAL)
