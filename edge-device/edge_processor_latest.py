@@ -891,54 +891,147 @@ or only if you are absolutely certain of active theft by a customer:
         return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
     
     def _parse_response(self, content: str) -> Dict:
-        """Parse JSON response from vision AI — robust brace-matching extractor"""
+        """
+        Parse JSON response from vision AI.
+        Handles all response formats models may return:
+          - Correct: {"is_shoplifting": true, ...}
+          - Array:   ["person walking out with bottle", {"is_shoplifting": true}]
+          - Nested:  {"result": {"is_shoplifting": true}}
+          - Plain text description with no JSON at all
+        """
+        SAFE = {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
+
         try:
             content = content.strip()
+            if not content:
+                return SAFE
 
-            if "{" not in content:
-                logger.warning(f"No JSON found in response: {content[:100]}")
-                return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
+            # ── Strategy 1: find and extract the first JSON object ──────────
+            if "{" in content:
+                start = content.find("{")
+                depth = 0
+                end = start
+                for i, ch in enumerate(content[start:], start):
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
 
-            # Extract the FIRST complete JSON object using brace matching.
-            # This handles models that add extra text before/after the JSON,
-            # or return multiple JSON blocks — we only want the first one.
-            start = content.find("{")
-            depth = 0
-            end = start
-            for i, ch in enumerate(content[start:], start):
-                if ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-                    if depth == 0:
-                        end = i + 1
-                        break
+                json_str = content[start:end]
+                try:
+                    result = json.loads(json_str)
+                    return self._build_result(result, content)
+                except json.JSONDecodeError:
+                    pass  # fall through to next strategy
 
-            json_str = content[start:end]
-            result = json.loads(json_str)
+            # ── Strategy 2: model returned a JSON array ──────────────────────
+            # e.g. ["description text", {"is_shoplifting": true, ...}]
+            if "[" in content:
+                start = content.find("[")
+                depth = 0
+                end = start
+                for i, ch in enumerate(content[start:], start):
+                    if ch == "[":
+                        depth += 1
+                    elif ch == "]":
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
 
-            is_shoplifting = bool(result.get("is_shoplifting", False))
-            description = result.get("description", "")
-            confidence = float(result.get("confidence", 0.5))
+                json_str = content[start:end]
+                try:
+                    arr = json.loads(json_str)
+                    # Find the first dict inside the array
+                    for item in arr:
+                        if isinstance(item, dict):
+                            return self._build_result(item, content)
+                    # No dict found — treat array of strings as description
+                    description = " ".join(str(x) for x in arr if isinstance(x, str))
+                    if description:
+                        return self._infer_from_text(description)
+                except json.JSONDecodeError:
+                    pass
 
-            if is_shoplifting:
-                logger.warning(f"🚨 SHOPLIFTING DETECTED: {description} (conf: {confidence})")
-            else:
-                logger.info(f"👁️ Analysis: {description[:60]} (safe)")
+            # ── Strategy 3: no JSON at all — infer from plain text ───────────
+            logger.warning(f"No JSON in response, inferring from text: {content[:120]}")
+            return self._infer_from_text(content)
 
-            return {
-                "analyzed": True,
-                "threat_level": "critical" if is_shoplifting else "safe",
-                "confidence": confidence,
-                "description": description,
-                "behaviors_detected": result.get("evidence", []),
-                "is_shoplifting": is_shoplifting
-            }
+        except Exception as e:
+            logger.error(f"Response parse error: {e}\nRaw: {content[:200]}")
+            return SAFE
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse response: {e}\nRaw: {content[:200]}")
+    def _build_result(self, result: dict, raw: str = "") -> Dict:
+        """Build standardised result dict from a parsed JSON object."""
+        # Handle nested result: {"result": {"is_shoplifting": ...}}
+        if "result" in result and isinstance(result["result"], dict):
+            result = result["result"]
 
-        return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
+        is_shoplifting = bool(result.get("is_shoplifting", False))
+        description    = str(result.get("description", result.get("desc", result.get("reason", ""))))
+        confidence     = float(result.get("confidence", result.get("score", 0.5)))
+        confidence     = max(0.0, min(1.0, confidence))
+
+        if is_shoplifting:
+            logger.warning(f"🚨 SHOPLIFTING DETECTED: {description} (conf: {confidence:.2f})")
+        else:
+            logger.info(f"👁️ Analysis: {description[:80]} (safe)")
+
+        return {
+            "analyzed":          True,
+            "threat_level":      "critical" if is_shoplifting else "safe",
+            "confidence":        confidence,
+            "description":       description,
+            "behaviors_detected": result.get("evidence", result.get("behaviors", [])),
+            "is_shoplifting":    is_shoplifting,
+        }
+
+    def _infer_from_text(self, text: str) -> Dict:
+        """
+        Last-resort: scan plain-text response for theft keywords.
+        Used when the model ignores the JSON format instruction entirely.
+        """
+        text_lower = text.lower()
+
+        theft_keywords = [
+            "concealing", "concealed", "hiding", "hidden", "shoplifting",
+            "stealing", "stole", "theft", "tucking", "tucked",
+            "slipping", "slipped", "pocketing", "pocketed",
+            "walking out with", "leaving with", "exiting with",
+            "without paying", "unpaid", "not paid",
+        ]
+        safe_keywords = [
+            "browsing", "looking at", "examining", "holding", "reading",
+            "standing", "walking", "shopping", "customer", "normal",
+            "no shoplifting", "not shoplifting", "no theft", "safe",
+        ]
+
+        theft_score = sum(1 for kw in theft_keywords if kw in text_lower)
+        safe_score  = sum(1 for kw in safe_keywords  if kw in text_lower)
+
+        # Require at least 2 theft keywords with no safe context to infer theft
+        is_shoplifting = theft_score >= 2 and safe_score == 0
+        confidence     = min(0.7, theft_score * 0.2) if is_shoplifting else 0.0
+
+        # Use first sentence as description
+        description = text.split(".")[0].strip()[:120] if text else "unclear"
+
+        if is_shoplifting:
+            logger.warning(f"🚨 SHOPLIFTING (text inference): {description} (conf: {confidence:.2f})")
+        else:
+            logger.info(f"👁️ Text inference: {description[:80]} (safe, theft={theft_score} safe={safe_score})")
+
+        return {
+            "analyzed":          True,
+            "threat_level":      "critical" if is_shoplifting else "safe",
+            "confidence":        confidence,
+            "description":       description,
+            "behaviors_detected": [],
+            "is_shoplifting":    is_shoplifting,
+        }
 
 
 class CentralServerSync:
