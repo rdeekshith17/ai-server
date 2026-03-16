@@ -1388,6 +1388,9 @@ class EdgeProcessor:
             return
         logger.info(f"Retrying {len(pending)} pending incident(s)...")
         for incident in pending:
+            # Save doc_id NOW — before any dict conversion that would lose it
+            doc_id = incident.doc_id
+
             # Re-compress thumbnail if oversized — handles incidents saved before the
             # thumbnail resize fix was applied, which would otherwise retry forever (413)
             thumbnail = incident.get("frame_thumbnail", "")
@@ -1405,7 +1408,7 @@ class EdgeProcessor:
                                 img = cv2.resize(img, (int(w * scale), int(h * scale)),
                                                  interpolation=cv2.INTER_AREA)
                             _, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                            incident = dict(incident)
+                            incident = dict(incident)  # convert to plain dict for mutation
                             incident["frame_thumbnail"] = base64.b64encode(buf).decode('utf-8')
                             new_kb = len(incident["frame_thumbnail"]) * 3 / 4 / 1024
                             logger.info(f"Re-compressed thumbnail: {approx_kb:.0f}KB → {new_kb:.0f}KB")
@@ -1416,7 +1419,7 @@ class EdgeProcessor:
             clean = {k: v for k, v in incident.items() if not k.startswith("_") and k != "uploaded"}
             success = await self.sync.upload_incident(clean)
             if success:
-                local_db.update({"uploaded": True}, doc_ids=[incident.doc_id])
+                local_db.update({"uploaded": True}, doc_ids=[doc_id])  # use saved doc_id
     
     async def run(self):
         """Main processing loop"""
