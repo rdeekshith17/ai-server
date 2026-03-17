@@ -795,6 +795,9 @@ class VisionAnalyzer:
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 40])
         img_base64 = base64.b64encode(buffer).decode('utf-8')
         
+        safe_example  = '{"is_shoplifting": false, "confidence": 0.0, "description": "one sentence describing what you see"}'
+        theft_example = '{"is_shoplifting": true, "confidence": 0.9, "description": "exact theft action and product observed"}'
+
         prompt = f"""You are a security camera AI monitoring a liquor store.
 
 STORE LAYOUT:
@@ -828,9 +831,9 @@ Be highly conservative. A false alarm is worse than a missed detection.
 If there is ANY doubt, return is_shoplifting=false.
 
 Respond with ONLY a single JSON object — no other text, no explanation:
-{{"is_shoplifting": false, "confidence": 0.0, "description": "one sentence describing what you see"}}
+{safe_example}
 or only if you are absolutely certain of active theft by a customer:
-{{"is_shoplifting": true, "confidence": 0.9, "description": "exact theft action and product observed"}}"""
+{theft_example}"""
 
         try:
             if self.provider == "ollama":
@@ -996,25 +999,32 @@ or only if you are absolutely certain of active theft by a customer:
         """
         text_lower = text.lower()
 
+        # Only very specific, unambiguous theft actions count
         theft_keywords = [
-            "concealing", "concealed", "hiding", "hidden", "shoplifting",
-            "stealing", "stole", "theft", "tucking", "tucked",
-            "slipping", "slipped", "pocketing", "pocketed",
-            "walking out with", "leaving with", "exiting with",
-            "without paying", "unpaid", "not paid",
+            "concealing", "concealed",
+            "hiding merchandise", "hiding product", "hiding bottle",
+            "shoplifting", "stealing", "stole",
+            "tucking into", "stuffing into",
+            "slipping into bag", "slipping into pocket",
+            "pocketing merchandise", "pocketing product",
+            "walking out with unpaid", "leaving with unpaid",
+            "exiting with concealed", "without paying",
         ]
         safe_keywords = [
-            "browsing", "looking at", "examining", "holding", "reading",
-            "standing", "walking", "shopping", "customer", "normal",
-            "no shoplifting", "not shoplifting", "no theft", "safe",
+            "browsing", "looking at", "examining", "holding", "reading label",
+            "standing", "shopping normally", "customer browsing",
+            "no shoplifting", "not shoplifting", "no theft", "no suspicious",
+            "safe", "normal", "employee", "staff", "working",
+            "looking at products", "picking up", "putting back",
         ]
 
         theft_score = sum(1 for kw in theft_keywords if kw in text_lower)
         safe_score  = sum(1 for kw in safe_keywords  if kw in text_lower)
 
-        # Require at least 2 theft keywords with no safe context to infer theft
-        is_shoplifting = theft_score >= 2 and safe_score == 0
-        confidence     = min(0.7, theft_score * 0.2) if is_shoplifting else 0.0
+        # Require at least 3 specific theft keywords AND zero safe context
+        # This prevents single ambiguous words from triggering
+        is_shoplifting = theft_score >= 3 and safe_score == 0
+        confidence     = min(0.7, theft_score * 0.15) if is_shoplifting else 0.0
 
         # Use first sentence as description
         description = text.split(".")[0].strip()[:120] if text else "unclear"
