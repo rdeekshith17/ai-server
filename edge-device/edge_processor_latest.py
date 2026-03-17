@@ -124,11 +124,11 @@ ENABLE_GPT = os.environ.get("ENABLE_GPT_ANALYSIS", "true").lower() == "true"
 # Shoplifting detection
 INCIDENT_COOLDOWN = int(os.environ.get("INCIDENT_COOLDOWN_SECONDS", "60"))
 GPT_ANALYSIS_INTERVAL = float(os.environ.get("GPT_ANALYSIS_INTERVAL", "2"))
-MIN_SUSPICIOUS_FRAMES = int(os.environ.get("MIN_SUSPICIOUS_FRAMES", "5"))
+MIN_SUSPICIOUS_FRAMES = int(os.environ.get("MIN_SUSPICIOUS_FRAMES", "3"))
 SUSPICIOUS_RESET_WINDOW = int(os.environ.get("SUSPICIOUS_RESET_WINDOW", "30"))  # seconds before suspicious frame counter resets
 REQUIRE_GPT_CONFIRMATION = os.environ.get("REQUIRE_GPT_CONFIRMATION", "true").lower() == "true"
 VISION_CONFIDENCE_THRESHOLD = float(os.environ.get("VISION_CONFIDENCE_THRESHOLD", "0.75"))  # min AI confidence to trigger incident
-MIN_COMBINED_SIGNALS = int(os.environ.get("MIN_COMBINED_SIGNALS", "2"))  # min distinct pose signals before passing to vision AI
+MIN_COMBINED_SIGNALS = int(os.environ.get("MIN_COMBINED_SIGNALS", "2"))  # 2 distinct pose types needed before calling vision AI
 
 # Business hours — detection is suppressed outside store open hours
 # Format: 24-hour integers. e.g. 8 = 8:00 AM, 19 = 7:00 PM
@@ -1301,54 +1301,61 @@ class EdgeProcessor:
                 if status in {"suspicious_hands", "crouching", "looking_around", "reaching"}:
                     suspicious_poses.append(status)
 
+            # suspicious_hands alone fires too often on normal shoppers picking up bottles.
+            # Skip hands-only frames unless a high-value signal (crouching/reaching) is also present.
+            # This still allows hands to accumulate in the tracker when paired with other signals.
+            unique_this_frame = set(suspicious_poses)
+            HIGH_VALUE = {"crouching", "reaching"}
+            if unique_this_frame == {"suspicious_hands"} and not (unique_this_frame & HIGH_VALUE):
+                suspicious_poses = []  # hands-only — too common in a liquor store, skip
+
             if suspicious_poses:
-                # Track suspicious frames per camera
                 camera_id = camera.camera_id
                 if camera_id not in self.suspicious_tracker:
                     self.suspicious_tracker[camera_id] = {
                         "count": 0,
                         "last_time": 0,
-                        "signals": set()  # track distinct signal types seen
+                        "signals": set()
                     }
 
                 tracker = self.suspicious_tracker[camera_id]
                 current_time = time.time()
 
-                # Reset counter if too much time has passed
                 if current_time - tracker["last_time"] > SUSPICIOUS_RESET_WINDOW:
                     tracker["count"] = 1
                     tracker["signals"] = set(suspicious_poses)
                 else:
                     tracker["count"] += 1
-                    tracker["signals"].update(suspicious_poses)  # accumulate distinct signals
+                    tracker["signals"].update(suspicious_poses)
                 tracker["last_time"] = current_time
 
                 distinct_signals = len(tracker["signals"])
-                logger.info(
-                    f"⚠️ Suspicious pose: {suspicious_poses} "
-                    f"(frame {tracker['count']}/{MIN_SUSPICIOUS_FRAMES}, "
-                    f"signals {distinct_signals}/{MIN_COMBINED_SIGNALS})"
-                )
 
-                # Require BOTH enough frames AND enough distinct signal types
-                # This prevents a single repeated normal behavior from triggering
+                # Log only on first frame and when threshold is reached — reduces spam
+                if tracker["count"] == 1 or tracker["count"] >= MIN_SUSPICIOUS_FRAMES:
+                    logger.info(
+                        f"⚠️ Suspicious pose: {list(unique_this_frame)} "
+                        f"(frame {min(tracker['count'], MIN_SUSPICIOUS_FRAMES)}/{MIN_SUSPICIOUS_FRAMES}, "
+                        f"signals {distinct_signals}/{MIN_COMBINED_SIGNALS})"
+                    )
+
                 if tracker["count"] < MIN_SUSPICIOUS_FRAMES:
                     return None
                 if distinct_signals < MIN_COMBINED_SIGNALS:
-                    logger.info(f"⏳ Waiting for more distinct signals ({distinct_signals}/{MIN_COMBINED_SIGNALS})")
                     return None
 
-                # Reset window after passing threshold — prevents re-triggering on the same
-                # sustained behavior without new evidence, and stops counter growing to 9000+
+                # Reset after threshold — prevents runaway counts
                 tracker["count"] = 0
                 tracker["signals"] = set()
+                logger.info(f"🎯 Pose threshold reached — escalating to vision AI")
+
             else:
-                # No suspicious pose this frame — decay the counter slightly
-                # so a brief normal pause doesn't keep the counter artificially high
+                # Normal frame — decay counter gently
                 camera_id = camera.camera_id
                 if camera_id in self.suspicious_tracker:
-                    tracker = self.suspicious_tracker[camera_id]
-                    tracker["count"] = max(0, tracker["count"] - 1)
+                    self.suspicious_tracker[camera_id]["count"] = max(
+                        0, self.suspicious_tracker[camera_id]["count"] - 1
+                    )
         
         # Step 4: Pose-only path (GPT disabled OR GPT confirmation not required)
         if not ENABLE_GPT:
