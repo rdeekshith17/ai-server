@@ -715,7 +715,7 @@ class VisionAnalyzer:
     
     def __init__(self):
         global ai_model_status
-        self.last_analysis_time = 0
+        self.analysis_times: Dict[str, float] = {}  # per-camera last analysis time
         self.min_analysis_interval = GPT_ANALYSIS_INTERVAL
         self.provider = AI_PROVIDER
         
@@ -768,26 +768,27 @@ class VisionAnalyzer:
             ai_model_status["vision_ai"]["status"] = f"error: {str(e)[:30]}"
             logger.error(f"Ollama connection failed: {e}")
     
-    async def analyze_scene(self, frame: np.ndarray, detections: List[Dict]) -> Dict:
+    async def analyze_scene(self, frame: np.ndarray, detections: List[Dict], camera_id: str = "default") -> Dict:
         """Analyze scene for shoplifting using Ollama or Emergent"""
         if not self.enabled:
             return {"analyzed": False, "threat_level": "safe", "is_shoplifting": False}
 
         # Hard guard — if YOLO detected no people, never call the vision model.
-        # Vision LLMs hallucinate people in empty frames — YOLO is the ground truth.
         if len(detections) < MIN_PERSONS_FOR_ANALYSIS:
             return {"analyzed": False, "skipped": True, "is_shoplifting": None,
                     "reason": "no_persons_detected"}
 
-        # Rate limit — return a neutral skip sentinel, NOT is_shoplifting=False
+        # Per-camera rate limit — each camera gets its own independent interval
+        # so two cameras don't block each other
         now = time.time()
-        if now - self.last_analysis_time < self.min_analysis_interval:
+        last_time = self.analysis_times.get(camera_id, 0)
+        if now - last_time < self.min_analysis_interval:
             return {"analyzed": False, "skipped": True, "is_shoplifting": None, "reason": "rate_limited"}
 
-        logger.info(f"🔍 Running {self.provider} analysis ({len(detections)} people)...")
+        logger.info(f"🔍 Running {self.provider} analysis on {camera_id} ({len(detections)} people)...")
 
-        # Update timestamp before the call
-        self.last_analysis_time = now
+        # Update per-camera timestamp before the call
+        self.analysis_times[camera_id] = now
 
         # Crop bottom 20% of frame — fisheye cameras produce lens flare/overexposure
         # at the bottom edge which confuses the vision model (white blob in image)
@@ -1401,8 +1402,8 @@ class EdgeProcessor:
                     None
                 )
 
-        # Always run vision AI when people are present — rate limiter controls frequency
-        vision_result = await self.vision_analyzer.analyze_scene(frame, detections)
+        # Always run vision AI when people are present — per-camera rate limiter controls frequency
+        vision_result = await self.vision_analyzer.analyze_scene(frame, detections, camera.camera_id)
         
         # Skip rate-limited frames — don't treat as safe
         if vision_result.get("skipped"):
