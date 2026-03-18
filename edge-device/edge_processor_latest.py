@@ -1326,6 +1326,8 @@ class EdgeProcessor:
         
         # Step 3: Pose detection for suspicious behavior (if enabled)
         suspicious_poses = []
+        pose_threshold_reached = False
+
         if ENABLE_POSE:
             poses = self.detector.detect_poses(frame)
             for pose in poses:
@@ -1334,20 +1336,17 @@ class EdgeProcessor:
                     suspicious_poses.append(status)
 
             # suspicious_hands alone fires too often on normal shoppers picking up bottles.
-            # Skip hands-only frames unless a high-value signal (crouching/reaching) is also present.
-            # This still allows hands to accumulate in the tracker when paired with other signals.
+            # Skip hands-only frames unless a high-value signal is also present.
             unique_this_frame = set(suspicious_poses)
             HIGH_VALUE = {"crouching", "reaching"}
             if unique_this_frame == {"suspicious_hands"} and not (unique_this_frame & HIGH_VALUE):
-                suspicious_poses = []  # hands-only — too common in a liquor store, skip
+                suspicious_poses = []
 
             if suspicious_poses:
                 camera_id = camera.camera_id
                 if camera_id not in self.suspicious_tracker:
                     self.suspicious_tracker[camera_id] = {
-                        "count": 0,
-                        "last_time": 0,
-                        "signals": set()
+                        "count": 0, "last_time": 0, "signals": set()
                     }
 
                 tracker = self.suspicious_tracker[camera_id]
@@ -1363,7 +1362,6 @@ class EdgeProcessor:
 
                 distinct_signals = len(tracker["signals"])
 
-                # Log only on first frame and when threshold is reached — reduces spam
                 if tracker["count"] == 1 or tracker["count"] >= MIN_SUSPICIOUS_FRAMES:
                     logger.info(
                         f"⚠️ Suspicious pose: {list(unique_this_frame)} "
@@ -1371,57 +1369,52 @@ class EdgeProcessor:
                         f"signals {distinct_signals}/{MIN_COMBINED_SIGNALS})"
                     )
 
-                if tracker["count"] < MIN_SUSPICIOUS_FRAMES:
-                    return None
-                if distinct_signals < MIN_COMBINED_SIGNALS:
-                    return None
-
-                # Reset after threshold — prevents runaway counts
-                tracker["count"] = 0
-                tracker["signals"] = set()
-                logger.info(f"🎯 Pose threshold reached — escalating to vision AI")
-
+                if tracker["count"] >= MIN_SUSPICIOUS_FRAMES and distinct_signals >= MIN_COMBINED_SIGNALS:
+                    pose_threshold_reached = True
+                    tracker["count"] = 0
+                    tracker["signals"] = set()
+                    logger.info(f"🎯 Pose threshold reached — escalating to vision AI")
             else:
-                # Normal frame — decay counter gently
                 camera_id = camera.camera_id
                 if camera_id in self.suspicious_tracker:
                     self.suspicious_tracker[camera_id]["count"] = max(
                         0, self.suspicious_tracker[camera_id]["count"] - 1
                     )
-        
-        # Step 4: Pose-only path (GPT disabled OR GPT confirmation not required)
+
+        # Step 4: Pose-only path (GPT disabled)
         if not ENABLE_GPT:
-            if suspicious_poses and not REQUIRE_GPT_CONFIRMATION:
+            if pose_threshold_reached and not REQUIRE_GPT_CONFIRMATION:
                 return await self._create_incident_if_allowed(
                     camera, frame, detections,
                     {
-                        "analyzed": False,
-                        "threat_level": "critical",
-                        "confidence": 0.7,
+                        "analyzed": False, "threat_level": "critical", "confidence": 0.7,
                         "description": f"Suspicious behavior: {', '.join(suspicious_poses)}",
-                        "behaviors_detected": suspicious_poses,
-                        "is_shoplifting": True
+                        "behaviors_detected": suspicious_poses, "is_shoplifting": True
                     },
                     None
                 )
             return None
-        
-        # Pose fallback: if pose is confident AND GPT confirmation not required, fire now
-        if suspicious_poses and not REQUIRE_GPT_CONFIRMATION:
-            return await self._create_incident_if_allowed(
-                camera, frame, detections,
-                {
-                    "analyzed": False,
-                    "threat_level": "critical",
-                    "confidence": 0.7,
-                    "description": f"Suspicious behavior: {', '.join(suspicious_poses)}",
-                    "behaviors_detected": suspicious_poses,
-                    "is_shoplifting": True
-                },
-                None
-            )
 
-        # Step 5: Vision AI Analysis (Ollama or Emergent)
+        # Step 5: Vision AI
+        # Run vision AI when:
+        #   (a) pose threshold reached — suspicious behavior detected, AI confirms
+        #   (b) periodically on any frame with people — AI runs independently as a
+        #       second line of defence even when pose detection sees nothing unusual
+        #       (e.g. a professional shoplifter who knows to avoid suspicious poses)
+        if not pose_threshold_reached and not REQUIRE_GPT_CONFIRMATION:
+            # Pose fallback — fire immediately if no GPT confirmation needed
+            if suspicious_poses:
+                return await self._create_incident_if_allowed(
+                    camera, frame, detections,
+                    {
+                        "analyzed": False, "threat_level": "critical", "confidence": 0.7,
+                        "description": f"Suspicious behavior: {', '.join(suspicious_poses)}",
+                        "behaviors_detected": suspicious_poses, "is_shoplifting": True
+                    },
+                    None
+                )
+
+        # Always run vision AI when people are present — rate limiter controls frequency
         vision_result = await self.vision_analyzer.analyze_scene(frame, detections)
         
         # Skip rate-limited frames — don't treat as safe
