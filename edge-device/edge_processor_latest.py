@@ -123,7 +123,7 @@ ENABLE_GPT = os.environ.get("ENABLE_GPT_ANALYSIS", "true").lower() == "true"
 
 # Shoplifting detection
 INCIDENT_COOLDOWN = int(os.environ.get("INCIDENT_COOLDOWN_SECONDS", "60"))
-GPT_ANALYSIS_INTERVAL = float(os.environ.get("GPT_ANALYSIS_INTERVAL", "2"))
+GPT_ANALYSIS_INTERVAL = float(os.environ.get("GPT_ANALYSIS_INTERVAL", "10"))
 MIN_SUSPICIOUS_FRAMES = int(os.environ.get("MIN_SUSPICIOUS_FRAMES", "3"))
 SUSPICIOUS_RESET_WINDOW = int(os.environ.get("SUSPICIOUS_RESET_WINDOW", "30"))  # seconds before suspicious frame counter resets
 REQUIRE_GPT_CONFIRMATION = os.environ.get("REQUIRE_GPT_CONFIRMATION", "true").lower() == "true"
@@ -718,7 +718,6 @@ class VisionAnalyzer:
         self.last_analysis_time = 0
         self.min_analysis_interval = GPT_ANALYSIS_INTERVAL
         self.provider = AI_PROVIDER
-        self.last_frame_hash = None  # track last analyzed frame to prevent duplicates
         
         # Check if vision AI is enabled and configured
         if AI_PROVIDER == "ollama":
@@ -784,18 +783,6 @@ class VisionAnalyzer:
         now = time.time()
         if now - self.last_analysis_time < self.min_analysis_interval:
             return {"analyzed": False, "skipped": True, "is_shoplifting": None, "reason": "rate_limited"}
-
-        # Duplicate frame check — skip if this is the exact same frame as last time.
-        # last_frame is reused when RTSP has no new data, causing duplicate incidents.
-        # Use a fast perceptual hash (mean of downsampled frame) to detect identical frames.
-        try:
-            small = cv2.resize(frame, (16, 16))
-            frame_hash = hash(small.tobytes())
-            if frame_hash == self.last_frame_hash:
-                return {"analyzed": False, "skipped": True, "is_shoplifting": None, "reason": "duplicate_frame"}
-            self.last_frame_hash = frame_hash
-        except Exception:
-            pass  # if hash fails, proceed anyway
 
         logger.info(f"🔍 Running {self.provider} analysis ({len(detections)} people)...")
 
