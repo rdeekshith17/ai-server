@@ -718,6 +718,7 @@ class VisionAnalyzer:
         self.last_analysis_time = 0
         self.min_analysis_interval = GPT_ANALYSIS_INTERVAL
         self.provider = AI_PROVIDER
+        self.last_frame_hash = None  # track last analyzed frame to prevent duplicates
         
         # Check if vision AI is enabled and configured
         if AI_PROVIDER == "ollama":
@@ -783,16 +784,37 @@ class VisionAnalyzer:
         now = time.time()
         if now - self.last_analysis_time < self.min_analysis_interval:
             return {"analyzed": False, "skipped": True, "is_shoplifting": None, "reason": "rate_limited"}
-        
+
+        # Duplicate frame check — skip if this is the exact same frame as last time.
+        # last_frame is reused when RTSP has no new data, causing duplicate incidents.
+        # Use a fast perceptual hash (mean of downsampled frame) to detect identical frames.
+        try:
+            small = cv2.resize(frame, (16, 16))
+            frame_hash = hash(small.tobytes())
+            if frame_hash == self.last_frame_hash:
+                return {"analyzed": False, "skipped": True, "is_shoplifting": None, "reason": "duplicate_frame"}
+            self.last_frame_hash = frame_hash
+        except Exception:
+            pass  # if hash fails, proceed anyway
+
         logger.info(f"🔍 Running {self.provider} analysis ({len(detections)} people)...")
-        
-        # Update timestamp before the call — prevents tight retry loop if the call throws
+
+        # Update timestamp before the call
         self.last_analysis_time = now
 
-        # Quality 40 for vision AI — lower is fine here since the AI doesn't need
-        # photographic clarity, just enough detail to identify behaviors.
-        # Thumbnails stored in incidents use quality 75 for human review.
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 40])
+        # Crop bottom 20% of frame — fisheye cameras produce lens flare/overexposure
+        # at the bottom edge which confuses the vision model (white blob in image)
+        h, w = frame.shape[:2]
+        frame_cropped = frame[:int(h * 0.80), :]
+
+        # Resize to 640px wide for better clarity — quality 60 is a good balance
+        # between detail for the AI and speed on Orin Nano hardware
+        scale = min(640 / w, 1.0)
+        if scale < 1.0:
+            frame_cropped = cv2.resize(frame_cropped,
+                                       (int(w * scale), int(frame_cropped.shape[0] * scale)),
+                                       interpolation=cv2.INTER_AREA)
+        _, buffer = cv2.imencode('.jpg', frame_cropped, [cv2.IMWRITE_JPEG_QUALITY, 60])
         img_base64 = base64.b64encode(buffer).decode('utf-8')
         
         safe_example  = '{"is_shoplifting": false, "confidence": 0.0, "description": "one sentence describing what you see"}'
@@ -1419,13 +1441,26 @@ class EdgeProcessor:
             return await self._create_incident_if_allowed(camera, frame, detections, vision_result, None)
     
     async def _create_incident_if_allowed(self, camera, frame, detections, vision_result, watchlist_match):
-        """Create CRITICAL incident if cooldown allows"""
+        """Create CRITICAL incident if cooldown allows and frame is not a duplicate"""
         current_time = time.time()
         camera_last_incident = getattr(camera, 'last_incident_time', 0)
-        
+
         if current_time - camera_last_incident < INCIDENT_COOLDOWN:
             return None  # Cooldown active
-        
+
+        # Duplicate frame guard — prevent two incidents from the exact same frame
+        # (happens when last_frame is reused across multiple loop iterations)
+        try:
+            small = cv2.resize(frame, (16, 16))
+            frame_hash = hash(small.tobytes())
+            last_hash = getattr(camera, 'last_incident_frame_hash', None)
+            if frame_hash == last_hash:
+                logger.debug(f"Skipping duplicate incident frame on {camera.name}")
+                return None
+            camera.last_incident_frame_hash = frame_hash
+        except Exception:
+            pass
+
         camera.last_incident_time = current_time
         return await self.create_incident(camera, frame, detections, [], vision_result, watchlist_match)
     
@@ -1438,22 +1473,32 @@ class EdgeProcessor:
         annotated_frame = frame.copy()
         for det in detections:
             x1, y1, x2, y2 = det["bbox"]
-            # Red box for all - this is a shoplifting incident
             cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
-            cv2.putText(annotated_frame, "SHOPLIFTER", (x1, y1-10),
+            cv2.putText(annotated_frame, "SHOPLIFTER", (x1, max(0, y1 - 10)),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-        # Resize to max 640x480 to keep payload size manageable (fixes 413 errors)
-        # Quality 75 — good balance between file size and visual clarity for evidence
+        # Crop bottom 20% — fisheye cameras produce white lens flare/overexposure
+        # at the bottom edge which obscures the image and wastes bandwidth
         thumb_h, thumb_w = annotated_frame.shape[:2]
-        scale = min(640 / thumb_w, 480 / thumb_h, 1.0)
+        annotated_frame = annotated_frame[:int(thumb_h * 0.80), :]
+        thumb_h = annotated_frame.shape[0]
+
+        # Add timestamp and camera name overlay for evidence clarity
+        timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cv2.putText(annotated_frame, f"{camera.name} | {timestamp_str}",
+                    (10, thumb_h - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # Resize to max 800x600 for better evidence clarity (was 640x480)
+        scale = min(800 / thumb_w, 600 / thumb_h, 1.0)
         if scale < 1.0:
             annotated_frame = cv2.resize(
                 annotated_frame,
                 (int(thumb_w * scale), int(thumb_h * scale)),
                 interpolation=cv2.INTER_AREA
             )
-        _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        # Quality 82 — clear enough for evidence, small enough to avoid 413
+        _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 82])
         thumbnail = base64.b64encode(buffer).decode('utf-8')
         
         incident = {
