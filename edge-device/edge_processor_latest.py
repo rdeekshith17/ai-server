@@ -89,7 +89,7 @@ import asyncio
 import logging
 import numpy as np
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 from collections import deque
 import threading
@@ -135,6 +135,11 @@ MIN_COMBINED_SIGNALS = int(os.environ.get("MIN_COMBINED_SIGNALS", "2"))  # 2 dis
 STORE_OPEN_HOUR  = int(os.environ.get("STORE_OPEN_HOUR",  "8"))
 STORE_CLOSE_HOUR = int(os.environ.get("STORE_CLOSE_HOUR", "19"))
 ENFORCE_BUSINESS_HOURS = os.environ.get("ENFORCE_BUSINESS_HOURS", "true").lower() == "true"
+
+# Timezone — offset from UTC in hours (e.g. -5 for US Central, -4 for US Eastern DST)
+# Set this to match your store's local timezone so incident timestamps match camera timestamps
+TIMEZONE_OFFSET_HOURS = float(os.environ.get("TIMEZONE_OFFSET_HOURS", "0"))
+STORE_TZ = timezone(timedelta(hours=TIMEZONE_OFFSET_HOURS))
 
 # Minimum YOLO-confirmed persons required before vision AI is called
 # Prevents hallucination — if YOLO sees 0 people, vision AI is never invoked
@@ -413,7 +418,36 @@ class CameraStream:
             logger.debug(f"Frame corruption check error: {e}")
             return False  # Don't discard if check itself fails
     
-    def get_snapshot(self) -> Optional[str]:
+    def flush_and_grab(self) -> Optional[np.ndarray]:
+        """
+        Drain stale frames from the RTSP buffer and return the most current frame.
+        Called right before creating an incident — Ollama takes 8-10s to respond,
+        during which the buffer fills with old frames. This discards those and
+        returns the freshest available frame so the incident image matches real time.
+        """
+        if not self.cap or not self.cap.isOpened():
+            return self.last_frame
+
+        fresh = None
+        try:
+            # Grab (decode=False) to drain the buffer quickly without decoding
+            # then do one final read() to get the actual current frame
+            for _ in range(10):  # drain up to 10 buffered frames
+                grabbed = self.cap.grab()
+                if not grabbed:
+                    break
+
+            # Now retrieve the most recent frame
+            ret, frame = self.cap.retrieve()
+            if ret and frame is not None and not self._is_frame_corrupted(frame):
+                self.last_frame = frame
+                self.last_frame_time = time.time()
+                self.health.record_frame()
+                fresh = frame
+        except Exception as e:
+            logger.debug(f"flush_and_grab error on {self.name}: {e}")
+
+        return fresh if fresh is not None else self.last_frame
         """Get current frame as base64 JPEG"""
         frame = self.last_frame
         if frame is None:
@@ -1430,7 +1464,6 @@ class EdgeProcessor:
             return None  # Cooldown active
 
         # Duplicate frame guard — prevent two incidents from the exact same frame
-        # (happens when last_frame is reused across multiple loop iterations)
         try:
             small = cv2.resize(frame, (16, 16))
             frame_hash = hash(small.tobytes())
@@ -1441,6 +1474,14 @@ class EdgeProcessor:
             camera.last_incident_frame_hash = frame_hash
         except Exception:
             pass
+
+        # Flush stale RTSP buffer frames and grab the freshest frame available.
+        # Ollama takes 8-10s to respond — by the time we get here the buffer
+        # has filled with old frames. flush_and_grab drains them so the incident
+        # thumbnail shows what's happening RIGHT NOW, not 10 seconds ago.
+        fresh_frame = camera.flush_and_grab()
+        if fresh_frame is not None:
+            frame = fresh_frame
 
         camera.last_incident_time = current_time
         return await self.create_incident(camera, frame, detections, [], vision_result, watchlist_match)
