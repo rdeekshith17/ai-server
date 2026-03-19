@@ -448,11 +448,13 @@ class CameraStream:
             logger.debug(f"flush_and_grab error on {self.name}: {e}")
 
         return fresh if fresh is not None else self.last_frame
+
+    def get_snapshot(self) -> Optional[str]:
         """Get current frame as base64 JPEG"""
         frame = self.last_frame
         if frame is None:
             return None
-        
+
         try:
             # Reject corrupted frames before encoding
             if self._is_frame_corrupted(frame):
