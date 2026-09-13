@@ -53,9 +53,16 @@ Thumbs.db
 .ipynb_checkpoints/
 .cache/
 
-# Generated test artifacts
+# Generated test and runtime artifacts
 test_person_*.png
 test_*_video.mp4
+test_reports/
+backend/video_storage/
+
+# Local model weights / large ML artifacts
+*.pt
+*.onnx
+*.engine
 
 # Archives / binaries
 *.zip
